@@ -4,7 +4,7 @@
 
 ![Quickshell](https://img.shields.io/badge/Quickshell-0.3.1+-5277C3?style=for-the-badge&logo=qt&logoColor=white)
 ![Hyprland](https://img.shields.io/badge/Hyprland-Wayland-00A4DC?style=for-the-badge&logo=wayland&logoColor=white)
-![UI](https://img.shields.io/badge/Style-Metro_Acrylic_Glass-blueviolet?style=for-the-badge)
+![UI](https://img.shields.io/badge/Style-Metro_Matte_Glass-blueviolet?style=for-the-badge)
 ![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)
 
 <p align="center">
