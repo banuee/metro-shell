@@ -1,0 +1,11 @@
+singleton Theme 1.0 Theme.qml
+KitToggle 1.0 KitToggle.qml
+KitSlider 1.0 KitSlider.qml
+KitCombo 1.0 KitCombo.qml
+Personalization 1.0 Personalization.qml
+SoundSec 1.0 SoundSec.qml
+DisplaySec 1.0 DisplaySec.qml
+NetworkSec 1.0 NetworkSec.qml
+PowerSec 1.0 PowerSec.qml
+WidgetsSec 1.0 WidgetsSec.qml
+AboutSec 1.0 AboutSec.qml

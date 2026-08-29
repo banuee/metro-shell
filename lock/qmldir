@@ -1,0 +1,4 @@
+singleton Theme 1.0 Theme.qml
+singleton Weather 1.0 Weather.qml
+singleton Media 1.0 Media.qml
+LockScreen 1.0 LockScreen.qml

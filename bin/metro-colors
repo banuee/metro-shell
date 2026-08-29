@@ -1,0 +1,451 @@
+#!/usr/bin/env python3
+# metro-colors — акцент темы metro под текущие обои
+#
+#   metro-colors                применить акцент от текущих обоев (awww)
+#   metro-colors <image>        применить от указанной картинки
+#   metro-colors --vivid [img]  поднять насыщенность акцента (x1.3)
+#   metro-colors palette [img]  4-5 цветов-кандидатов из обоев (hex, по строке)
+#   metro-colors set <hex>      применить конкретный цвет как акцент
+#   metro-colors save-defaults  зафиксировать ТЕКУЩИЕ файлы как эталон сброса
+#   metro-colors status         показать текущий акцент
+#   metro-colors --status-hex   показать только hex
+#   metro-colors reset          откатить тему к эталону (save-defaults)
+#
+# Меняет: Theme.qml (teal) + тёмный оттенок кнопки «изменить» в TopPanel.qml
+# + hyprlock.conf (обои по маркеру m:bg, акцент m:accent-*) — если файл есть.
+# Копии Theme.qml в инстансах metro-settings/metro-lock перезаписываются.
+# Стеклянные токены (bg/glass/stroke) и WP-цвета статусов не трогает.
+# Quickshell сам перезагружает конфиг при сохранении файла.
+
+import argparse
+import colorsys
+import glob
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+
+DIR = os.path.expanduser("~/.config/quickshell/metro")
+THEME = os.path.join(DIR, "Theme.qml")
+TOPPANEL = os.path.join(DIR, "TopPanel.qml")
+BACKUP_DIR = os.path.join(DIR, ".theme-backup")
+
+LOCK_CONF = os.path.expanduser("~/.config/hypr/hyprlock.conf")
+SETTINGS_THEME = os.path.expanduser(
+    "~/.config/quickshell/metro-settings/Theme.qml")
+LOCK_THEME = os.path.expanduser(
+    "~/.config/quickshell/metro-lock/Theme.qml")
+
+TEAL_RE = re.compile(r'(readonly property color teal:\s*)"[^"]*"')
+EDIT_RE = re.compile(r'(color:\s*root\.editMode \? )"#[0-9a-fA-F]{6}"')
+
+# маркеры «# m:<id>» в hyprlock.conf — значения этих строк перезаписываются
+MARK_RE = re.compile(
+    r'(?m)^([ \t]*)#[ \t]*m:([\w-]+)[ \t]*\n([ \t]*)([\w_]+)[ \t]*=[ \t]*[^\n]*$')
+
+DEFAULT_TEAL = "#00aba9"
+
+
+def hex_to_hls(hx):
+    hx = hx.lstrip("#")
+    r, g, b = (int(hx[i:i + 2], 16) / 255 for i in (0, 2, 4))
+    return colorsys.rgb_to_hls(r, g, b)
+
+
+def hls_to_hex(h, l, s):
+    r, g, b = colorsys.hls_to_rgb(h, l, s)
+    return "#%02x%02x%02x" % tuple(round(c * 255) for c in (r, g, b))
+
+
+def accent_from_hex(src, vivid=False):
+    h, l, s = hex_to_hls(src)
+    if vivid:
+        s = min(1.0, s * 1.3)
+    l = max(0.34, min(0.45, l))
+    return hls_to_hex(h, l, s)
+
+
+def dark_variant(accent):
+    # тёмная подложка-подсветка акцента (текст кнопки «изменить» в editMode)
+    hx = accent.lstrip("#")
+    r, g, b = (int(hx[i:i + 2], 16) for i in (0, 2, 4))
+    return "#%02x%02x%02x" % tuple(min(255, round(c * 0.16) + 5) for c in (r, g, b))
+
+
+def rgba_dec(hexcol, alpha):
+    hx = hexcol.lstrip("#")
+    r, g, b = (int(hx[i:i + 2], 16) for i in (0, 2, 4))
+    return f"rgba({r}, {g}, {b}, {alpha})"
+
+
+def lock_values(accent, image):
+    return {
+        "bg": image,
+        "accent-hero": rgba_dec(accent, 0.92),
+        "accent-check": rgba_dec(accent, 0.95),
+    }
+
+
+def patch_markers(path, values):
+    """Заменяешь значения строк после комментариев «# m:<id>»."""
+    with open(path, encoding="utf-8") as f:
+        old = f.read()
+
+    def repl(m):
+        ind, mk, kind, key = m.group(1), m.group(2), m.group(3), m.group(4)
+        if mk not in values:
+            return m.group(0)
+        v = values[mk]
+        if v is None:
+            return m.group(0)
+        val = os.path.expanduser(str(v)) if mk == "bg" else str(v)
+        return f"{ind}# m:{mk}\n{kind}{key} = {val}"
+
+    new = MARK_RE.sub(repl, old)
+    if new == old:
+        return False
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(new)
+    os.replace(tmp, path)
+    return True
+
+
+def current_wallpaper():
+    # 1) живой ответ демона awww
+    try:
+        r = subprocess.run(["awww", "query"], capture_output=True,
+                           text=True, timeout=3)
+        if r.returncode == 0:
+            hits = re.findall(r'(\/[^\s,]+\.(?:jpe?g|png|webp|gif|bmp))',
+                              r.stdout, re.I)
+            for h in hits:
+                path = os.path.expanduser(h.rstrip(".,)"))
+                if os.path.isfile(path):
+                    return path
+    except Exception:
+        pass
+    # 2) путь, сохранённый скриптом wall
+    st = os.path.expanduser("~/.local/state/metro/wall")
+    if os.path.isfile(st):
+        try:
+            path = open(st).read().strip()
+            if os.path.isfile(path):
+                return path
+        except Exception:
+            pass
+    # 3) legacy: wbg в автозапуске / hyprland.lua
+    try:
+        out = subprocess.run(["pgrep", "-a", "-x", "wbg"],
+                             capture_output=True, text=True).stdout.strip()
+        if out:
+            path = os.path.expanduser(out.splitlines()[0].split()[-1])
+            if os.path.isfile(path):
+                return path
+    except Exception:
+        pass
+    lua = os.path.expanduser("~/.config/hypr/hyprland.lua")
+    if os.path.isfile(lua):
+        m = re.search(r'wbg\s+-s\s+(?:"([^"]+)"|(\S+))',
+                      open(lua, encoding="utf-8").read())
+        if m:
+            path = os.path.expanduser(m.group(1) or m.group(2))
+            if os.path.isfile(path):
+                return path
+    return None
+
+
+def accent_via_matugen(image):
+    if os.environ.get("METROCOLORS_NO_MATUGEN"):
+        raise RuntimeError("matugen disabled (test)")
+    r = subprocess.run(
+        ["matugen", "image", image, "--mode", "dark", "--dry-run",
+         "-j", "hex", "--prefer",
+         os.environ.get("METROCOLORS_PREFER", "saturation")],
+        capture_output=True, text=True)
+    if r.returncode != 0:
+        raise RuntimeError(r.stderr.strip().splitlines()[-1] if r.stderr else "matugen failed")
+    data = json.loads(r.stdout)
+    return data["colors"]["source_color"]["dark"]["color"]
+
+
+def accent_via_pil(image):
+    from PIL import Image
+    im = Image.open(image).convert("RGB").resize((96, 96))
+    q = im.quantize(colors=48, method=Image.Quantize.MEDIANCUT).convert("RGB")
+    raw = q.tobytes()
+    counts = {}
+    for i in range(0, len(raw), 3):
+        px = (raw[i], raw[i + 1], raw[i + 2])
+        counts[px] = counts.get(px, 0) + 1
+
+    def score(px):
+        h, l, s = colorsys.rgb_to_hls(*[c / 255 for c in px])
+        w = (0.05 + s ** 2) * (1.5 if 0.15 < l < 0.8 else 0.3)
+        return counts[px] * w
+
+    best = max(counts, key=score)
+    return "#%02x%02x%02x" % best
+
+
+def pick_accent(image):
+    src = None
+    try:
+        src = accent_via_matugen(image)
+    except Exception as e:
+        print(f"[metro-colors] matugen failed ({e}), fallback PIL", file=sys.stderr)
+    if src is None:
+        src = accent_via_pil(image)
+    return src
+
+
+def normalize(hx, lo, hi, smin):
+    """Кламп светлоты + минимальная насыщенность (тусклое → сочное)."""
+    h, l, s = hex_to_hls(hx)
+    return hls_to_hex(h, max(lo, min(hi, l)), max(smin, min(1.0, s)))
+
+
+def hue_dist(a, b):
+    d = abs(a - b) % 1.0
+    return min(d, 1.0 - d)
+
+
+def palette_from_pil(image, limit=4):
+    """Доминирующие цвета обоев (PIL mediancut), нормализованные под акцент:
+    L∈[0.36,0.52], s≥0.42, серые выкинуты, близкие по тону схлопнуты."""
+    from PIL import Image
+    im = Image.open(image).convert("RGB").resize((128, 128))
+    q = im.quantize(colors=64, method=Image.Quantize.MEDIANCUT).convert("RGB")
+    raw = q.tobytes()
+    counts = {}
+    for i in range(0, len(raw), 3):
+        px = (raw[i], raw[i + 1], raw[i + 2])
+        counts[px] = counts.get(px, 0) + 1
+    scored = sorted(counts.items(), key=lambda kv: -kv[1])
+    out = []
+    for px, _cnt in scored:
+        hx = "#%02x%02x%02x" % px
+        h, l, s = hex_to_hls(hx)
+        if s < 0.14:
+            continue
+        cand = normalize(hx, 0.36, 0.52, 0.42)
+        ch, cl, _ = hex_to_hls(cand)
+        if any(hue_dist(ch, eh) < 0.055 and abs(cl - el) < 0.14
+               for ex, el, eh in out):
+            continue
+        out.append((cand, cl, ch))
+        if len(out) >= limit:
+            break
+    return [c for c, _l, _h in out]
+
+
+def palette(image):
+    """Кандидаты акцента из обоев: matugen-source + сочные цвета из картинки."""
+    cands = []
+    try:
+        cands.append(accent_from_hex(accent_via_matugen(image)))
+    except Exception as e:
+        print(f"[metro-colors] matugen failed ({e})", file=sys.stderr)
+    for cand in palette_from_pil(image):
+        ch, cl, _ = hex_to_hls(cand)
+        if any(hue_dist(ch, eh) < 0.055 and abs(cl - el) < 0.14
+               for ex, el, eh in
+               [(c, *hex_to_hls(c)[1:]) for c in cands]):
+            continue
+        cands.append(cand)
+        if len(cands) >= 5:
+            break
+    return cands
+
+
+def sync_settings():
+    """У инстансов metro-settings/metro-lock СВОИ копии Theme.qml (симлинк
+    на ../metro/Theme.qml watcher quickshell не видит). Копируем in-place —
+    инстансы перезагружаются сами."""
+    for dst in (SETTINGS_THEME, LOCK_THEME):
+        if not os.path.isdir(os.path.dirname(dst)):
+            continue
+        if os.path.islink(dst):
+            os.unlink(dst)
+        shutil.copy2(THEME, dst)
+
+
+def backup(files):
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+    ts = time.strftime("%Y%m%d-%H%M%S")
+    for f in files:
+        base = os.path.basename(f)
+        dflt = os.path.join(BACKUP_DIR, base + ".default")
+        if not os.path.exists(dflt):
+            shutil.copy2(f, dflt)
+        shutil.copy2(f, os.path.join(BACKUP_DIR, f"{base}.{ts}"))
+    snaps = sorted(glob.glob(os.path.join(BACKUP_DIR, "*.qml"))
+                   + glob.glob(os.path.join(BACKUP_DIR, "*.conf")))
+    for old in sorted(g for g in snaps if not g.endswith(".default"))[:-10]:
+        os.remove(old)
+
+
+DEFAULT_FILES = (THEME, TOPPANEL, LOCK_CONF)
+
+
+def save_defaults():
+    """Снимаем .default С ТЕКУЩЕГО состояния — дальше --reset откатывает
+    к нему, а не к древним снапшотам времён создания настроек."""
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+    for f in DEFAULT_FILES:
+        if os.path.isfile(f):
+            shutil.copy2(f, os.path.join(BACKUP_DIR,
+                                         os.path.basename(f) + ".default"))
+    print("эталон сброса обновлён: " + ", ".join(
+        os.path.basename(f) for f in DEFAULT_FILES if os.path.isfile(f)))
+
+
+def restore_defaults():
+    restored = []
+    for f in DEFAULT_FILES:
+        dflt = os.path.join(BACKUP_DIR, os.path.basename(f) + ".default")
+        if os.path.isfile(dflt):
+            shutil.copy2(dflt, f)
+            restored.append(os.path.basename(f))
+    if restored:
+        print("восстановлено: " + ", ".join(restored))
+    else:
+        print("[metro-colors] нет эталона — сначала save-defaults",
+              file=sys.stderr)
+
+
+def patch(path, value):
+    with open(path, encoding="utf-8") as f:
+        old = f.read()
+    m = TEAL_RE if path == THEME else EDIT_RE
+    new = m.sub(lambda mm: mm.group(1) + '"' + value + '"', old, count=1)
+    if new == old:
+        return False
+    # ВАЖНО: писать IN-PLACE (не tmp+os.replace). Замена файла = новый inode,
+    # watcher quickshell его теряет и reload нестабилен. Запись в тот же
+    # inode даёт честный modify-ивент — инстансы перезагружаются.
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(new)
+    return True
+
+
+def preview(label, hexcol):
+    hx = hexcol.lstrip("#")
+    r, g, b = (int(hx[i:i + 2], 16) for i in (0, 2, 4))
+    print(f"  {label:<12} \033[48;2;{r};{g};{b}m      \033[0m  {hexcol}")
+
+
+def apply_accent(accent, image=None):
+    dark = dark_variant(accent)
+    print(f"обои: {image}" if image else "обои: не найдены")
+    preview("акцент", accent)
+    preview("editMode", dark)
+    backup((THEME, TOPPANEL, LOCK_CONF))
+    changed = patch(THEME, accent)
+    changed |= patch(TOPPANEL, dark)
+    sync_settings()
+    if os.path.isfile(LOCK_CONF):
+        values = lock_values(accent, image) if image else {
+            k: v for k, v in lock_values(accent, "").items() if k != "bg"}
+        lock_changed = patch_markers(
+            LOCK_CONF, values)
+        print("hyprlock: акцент обновлён" if lock_changed
+              else "hyprlock: без изменений")
+    print("готово (quickshell перезагрузит конфиг сам)" if changed
+          else "тема metro: без изменений")
+
+
+def apply(image, vivid=False):
+    if not os.path.isfile(THEME):
+        raise SystemExit(f"[metro-colors] не найден {THEME}")
+    accent = accent_from_hex(pick_accent(image), vivid)
+    apply_accent(accent, image)
+
+
+def set_accent(hexcol):
+    if not re.fullmatch(r"#?[0-9a-fA-F]{6}", hexcol):
+        raise SystemExit("[metro-colors] формат цвета: #rrggbb")
+    accent = normalize(hexcol if hexcol.startswith("#") else "#" + hexcol,
+                       0.30, 0.55, 0.25)
+    image = current_wallpaper()
+    apply_accent(accent, image)
+
+
+def reset():
+    restore_defaults()
+    sync_settings()
+    print("готово (инстансы quickshell перечитают конфиги сами)")
+
+
+def status():
+    with open(THEME, encoding="utf-8") as f:
+        m = TEAL_RE.search(f.read())
+    preview("текущий", m.group(0).split('"')[1] if m else "?")
+
+
+def status_hex():
+    with open(THEME, encoding="utf-8") as f:
+        m = TEAL_RE.search(f.read())
+    print(m.group(0).split('"')[1] if m else DEFAULT_TEAL)
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="metro-colors", add_help=False)
+    ap.add_argument("image", nargs="?")
+    ap.add_argument("arg2", nargs="?")
+    ap.add_argument("--vivid", action="store_true")
+    ap.add_argument("--reset", action="store_true")
+    ap.add_argument("--status", action="store_true")
+    ap.add_argument("--status-hex", action="store_true")
+    a = ap.parse_args()
+
+    if a.status_hex or a.image == "status-hex":
+        status_hex()
+        return
+    if a.reset or a.image == "reset":
+        reset()
+        return
+    if a.image == "save-defaults":
+        save_defaults()
+        return
+    if a.status or a.image == "status":
+        status()
+        return
+    if a.image in ("help", "--help"):
+        raise SystemExit(__doc__)
+
+    if a.image == "set":
+        if not a.arg2:
+            raise SystemExit("[metro-colors] укажи цвет: metro-colors set #rrggbb")
+        set_accent(a.arg2)
+        return
+    if a.image == "palette":
+        image = a.arg2
+        if not image:
+            image = current_wallpaper()
+        if not image or not os.path.isfile(os.path.expanduser(image)):
+            raise SystemExit("[metro-colors] нет обоев для палитры")
+        cands = palette(os.path.expanduser(image))
+        if not cands:
+            raise SystemExit("[metro-colors] палитра пуста")
+        for i, c in enumerate(cands):
+            preview(f"#{i + 1}", c)
+            print(c)
+        return
+
+    image = a.image
+    if not image:
+        image = current_wallpaper()
+        if not image:
+            raise SystemExit("[metro-colors] не нашёл текущие обои "
+                             "— укажи путь: metro-colors <картинка>")
+    if not os.path.isfile(image):
+        raise SystemExit(f"[metro-colors] нет файла: {image}")
+    apply(image, a.vivid)
+
+
+if __name__ == "__main__":
+    main()

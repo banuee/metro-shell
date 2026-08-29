@@ -1,0 +1,6 @@
+#!/bin/bash
+# Перезапуск metro-шелла quickshell (убить + запустить заново)
+pkill -x quickshell 2>/dev/null
+sleep 0.3
+QT_QPA_PLATFORMTHEME=gtk3 setsid quickshell -p "$HOME/.config/quickshell/metro" >/tmp/qs-metro.log 2>&1 </dev/null &
+echo "quickshell перезапущен, лог: /tmp/qs-metro.log"

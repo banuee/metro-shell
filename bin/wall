@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# wall — смена обоев через awww с анимацией + авто-перекраска темы metro
+#
+#   wall <картинка>       поставить обои (с красивой анимацией)
+#   wall random | rand    случайные из ~/Wallpapers (на 2 уровня вглубь)
+#   wall -t <тип> [img]   выбрать тип перехода: fade grow any outer wave wipe
+#                         left right top bottom random
+#   wall --no-theme       без перекраски metro-colors
+#
+# Перекраска затрагивает: Theme.qml шелла и hyprlock.conf (обои+акцент),
+# если hyprlock.conf есть.
+#
+# Переменные: WALL_FPS (по умолчанию 120), WALL_TRANSITION (тип по умолчанию).
+set -u
+
+WALLDIR="$HOME/Wallpapers"
+STATEDIR="${XDG_STATE_HOME:-$HOME/.local/state}/metro"
+mkdir -p "$STATEDIR"
+FPS="${WALL_FPS:-120}"
+THEME=1
+TYPE="${WALL_TRANSITION:-}"
+IMG=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -t) TYPE="$2"; shift 2 ;;
+        --no-theme) THEME=0; shift ;;
+        -h|--help) grep '^#' "$0" | cut -c3-; exit 0 ;;
+        *) IMG="$1"; shift ;;
+    esac
+done
+
+cur="$(cat "$STATEDIR/wall" 2>/dev/null || true)"
+
+if [[ -z "$IMG" || "$IMG" == "random" || "$IMG" == "rand" ]]; then
+    all_imgs="$(find "$WALLDIR" -maxdepth 2 -type f 2>/dev/null | grep -Evi '\.(jpe?g|png|webp|gif|bmp)$' -v)"
+    # сначала не повторяем текущие обои
+    pick="$(echo "$all_imgs" | grep -Fvx "$cur" | shuf -n1)"
+    [[ -n "$pick" && -f "$pick" ]] || pick="$(echo "$all_imgs" | shuf -n1)"
+    if [[ -f "$pick" ]]; then IMG="$pick"; fi
+fi
+
+if [[ ! -f "$IMG" ]]; then
+    echo "[wall] нет файла обоев: '$IMG'" >&2
+    exit 1
+fi
+IMG="$(readlink -f "$IMG")"
+
+# если тип не задан — свой curated-random (каждому эффекту свои параметры)
+T="${TYPE:-$(echo fade grow any outer wave left right wipe | tr ' ' '\n' | shuf -n1)}"
+case "$T" in
+    fade)   FLAGS=(--transition-duration 2.8 --transition-bezier .65,0,.35,1) ;;
+    grow)   FLAGS=(--transition-duration 2.2 --transition-pos 0.5,0.42) ;;
+    any)    FLAGS=(--transition-duration 2.2) ;;                                  # точка случайная сама
+    outer)  FLAGS=(--transition-duration 2.4) ;;
+    wave)   FLAGS=(--transition-duration 3.0 --transition-angle 315 --transition-wave 90,150) ;;
+    left|right|top|bottom) FLAGS=(--transition-duration 2.2) ;;
+    wipe)   FLAGS=(--transition-duration 2.4 --transition-angle $((RANDOM % 12 * 30))) ;;
+    *)      FLAGS=(--transition-duration 2.5) ;;                                  # ручной кастом
+esac
+
+if ! out="$(awww img --resize crop -f Lanczos3 --transition-type "$T" \
+        --transition-fps "$FPS" ${FLAGS[@]+"${FLAGS[@]}"} "$IMG" 2>&1)"; then
+    echo "[wall] ошибка: $out" >&2
+    echo "[wall] если демон не запущен — сделай: wall-start" >&2
+    exit 1
+fi
+
+printf '%s\n' "$IMG" > "$STATEDIR/wall"
+printf '%s\n' "обои: $IMG  [$T, ${FPS}fps]"
+printf '%s\n' "$T" > "$STATEDIR/last-transition"
+
+if (( THEME )); then
+    metro-colors >/dev/null 2>&1 && printf '%s\n' "тема: $(metro-colors status)" \
+        || echo "[wall] metro-colors не сработал (не критично)" >&2
+fi

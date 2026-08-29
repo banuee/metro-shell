@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=настройки
+GenericName=Параметры системы
+Comment=Metro настройки системы
+Exec=metro-settings
+Icon=preferences-system
+Terminal=false
+Categories=Settings;
+Keywords=settings;system;настройки;

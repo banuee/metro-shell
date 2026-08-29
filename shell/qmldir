@@ -1,0 +1,22 @@
+singleton Theme 1.0 Theme.qml
+singleton Weather 1.0 Weather.qml
+singleton Media 1.0 Media.qml
+TopPanel 1.0 TopPanel.qml
+LauncherPanel 1.0 LauncherPanel.qml
+ControlPanel 1.0 ControlPanel.qml
+HoverZone 1.0 HoverZone.qml
+PanelBase 1.0 PanelBase.qml
+Tile 1.0 Tile.qml
+TileFrame 1.0 TileFrame.qml
+Calendar 1.0 Calendar.qml
+WeatherDetail 1.0 WeatherDetail.qml
+WifiMenu 1.0 WifiMenu.qml
+BtMenu 1.0 BtMenu.qml
+PhotoWidget 1.0 PhotoWidget.qml
+PlayerWidget 1.0 PlayerWidget.qml
+PowerWidget 1.0 PowerWidget.qml
+PowerMenu 1.0 PowerMenu.qml
+SettingsWindow 1.0 SettingsWindow.qml
+WifiWindow 1.0 WifiWindow.qml
+BtWindow 1.0 BtWindow.qml
+ExecWidget 1.0 ExecWidget.qml

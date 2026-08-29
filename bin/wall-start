@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# wall-start — запуск awww-daemon при логине Hyprland + восстановление обоев
+# (вызывается из hyprland.lua: hl.exec_cmd("wall-start")). Идемпотентен.
+set -u
+
+STATEDIR="${XDG_STATE_HOME:-$HOME/.local/state}/metro"
+WALLDIR="$HOME/Wallpapers"
+
+if ! pgrep -x awww-daemon >/dev/null; then
+    (setsid awww-daemon >/tmp/awww-daemon.log 2>&1 </dev/null &)
+fi
+
+up=""
+for _ in $(seq 1 50); do
+    if up="$(awww query 2>/dev/null)"; then break; fi
+    sleep 0.1
+done
+if [[ -z "$up" ]]; then
+    echo "[wall-start] awww-daemon не поднялся, смотри /tmp/awww-daemon.log" >&2
+    exit 1
+fi
+
+awww restore >/dev/null 2>&1 || true
+
+# если в кэше нет обоев — ставим путь из state, иначе первую картинку из ~/Wallpapers
+cur="$(awww query 2>/dev/null)"
+if ! grep -Eqi 'displaying:[[:space:]]*/[^ ]+\.(jpe?g|png|webp|gif|bmp)' <<<"$cur"; then
+    img="$(cat "$STATEDIR/wall" 2>/dev/null || true)"
+    [[ -f "$img" ]] || img="$(find "$WALLDIR" -maxdepth 1 -type f 2>/dev/null | grep -Ei '\.(jpe?g|png|webp)$' | sort | head -n1)"
+    awww img "$img" --transition-type fade --transition-duration 1.5 \
+        --transition-fps "${WALL_FPS:-120}" >/dev/null 2>&1 || true
+fi

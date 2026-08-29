@@ -1,0 +1,43 @@
+#!/bin/bash
+# metro-lock — экран блокировки на quickshell (замена hyprlock)
+#   metro-lock            реальная блокировка (WlSessionLock, ext-session-lock-v1)
+#   metro-lock --debug    оверлей БЕЗ блокировки сессии (для тестов)
+# Фон: стоп-кадр экрана в момент блокировки (grim), фолбэк — текущие обои.
+
+DEBUG=0
+[ "$1" = "--debug" ] && DEBUG=1
+
+BG=/tmp/qs-lock-bg.png
+MARK=/tmp/qs-metro-lock.debug
+WALL=$(cat "$HOME/.local/state/metro/wall" 2>/dev/null)
+
+# стоп-кадр до старта локскрина (иначе снимем самого себя)
+MON="$(hyprctl monitors -j 2>/dev/null | jq -r '.[0].name' 2>/dev/null)"
+grim ${MON:+-o "$MON"} "$BG.tmp" 2>/dev/null && mv "$BG.tmp" "$BG" || {
+    [ -n "$WALL" ] && cp "$WALL" "$BG"
+}
+[ -f "$BG" ] || echo "metro-lock: нет фона — будет тёмная подложка" >&2
+
+# [c] в паттерне — чтобы pgrep/pkill не нашли сами себя
+PAT="quickshell -p .*metro-lo[c]k$"
+RUNNING=$(pgrep -f "$PAT" | head -n1)
+if [ -n "$RUNNING" ]; then
+    if [ "$DEBUG" = 1 ] || [ -f "$MARK" ]; then
+        pkill -f "$PAT"; sleep 0.2     # debug-рестарт или замена debug → real
+    else
+        exit 0                         # реальный лок уже стоит — не мешаем
+    fi
+fi
+rm -f "$MARK"
+[ "$DEBUG" = 1 ] && touch "$MARK"
+
+LOG=/tmp/qs-metro-lock.log
+if [ "$DEBUG" = 1 ]; then
+    METRO_LOCK_DEBUG=1 QT_QPA_PLATFORMTHEME=gtk3 \
+        setsid quickshell -p "$HOME/.config/quickshell/metro-lock" >"$LOG" 2>&1 </dev/null &
+    echo "metro-lock DEBUG запущен (сессия НЕ заблокирована), лог: $LOG"
+else
+    QT_QPA_PLATFORMTHEME=gtk3 \
+        setsid quickshell -p "$HOME/.config/quickshell/metro-lock" >"$LOG" 2>&1 </dev/null &
+    echo "экран заблокирован, лог: $LOG"
+fi
