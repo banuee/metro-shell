@@ -44,7 +44,9 @@ SettingsWindow {
             status = "Поиск устройств..."
             pScan.running = true
         } else {
+            // см. BtMenu.setScan: контроллеру нужен явный scan off
             pScan.running = false
+            pScanOff.running = true
             status = ""
         }
     }
@@ -103,6 +105,12 @@ SettingsWindow {
         id: pScan
 
         command: ["bluetoothctl", "scan", "on"]
+    }
+
+    Process {
+        id: pScanOff
+
+        command: ["bluetoothctl", "scan", "off"]
     }
 
     Timer {

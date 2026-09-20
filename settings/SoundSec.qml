@@ -5,9 +5,8 @@ Flickable {
     id: root
 
     clip: true
-    contentHeight: col.height + 8
+    contentHeight: col.height + 24
     boundsBehavior: Flickable.StopAtBounds
-
 
     property var win
     property var sinks: []
@@ -16,6 +15,7 @@ Flickable {
     property bool outMuted: false
     property real inVol: 0.5
     property bool inMuted: false
+    property bool playingTest: false
 
     function refresh() {
         pStatus.command = ["sh", "-c", "wpctl status"]
@@ -24,12 +24,14 @@ Flickable {
         pVol.running = true
     }
 
-    Timer {
-        id: delay
-
-        interval: 400
-        onTriggered: refresh()
+    function playTestSound() {
+        playingTest = true
+        win.run("pw-play /usr/share/sounds/freedesktop/stereo/complete.oga 2>/dev/null || paplay /usr/share/sounds/freedesktop/stereo/complete.oga 2>/dev/null || (speaker-test -t sine -f 440 -l 1 >/dev/null 2>&1 &)")
+        testTimer.restart()
     }
+
+    Timer { id: delay; interval: 400; onTriggered: refresh() }
+    Timer { id: testTimer; interval: 1500; onTriggered: playingTest = false }
 
     function parseStatus(t) {
         const sinks = [], sources = []
@@ -66,7 +68,6 @@ Flickable {
 
     Process {
         id: pStatus
-
         stdout: StdioCollector {
             onStreamFinished: {
                 const r = root.parseStatus(text)
@@ -78,7 +79,6 @@ Flickable {
 
     Process {
         id: pVol
-
         stdout: StdioCollector {
             onStreamFinished: {
                 const m = text.match(/o=Volume: ([\d.]+)( MUTED)?/)
@@ -100,20 +100,19 @@ Flickable {
 
         Rectangle {
             id: devRowRoot
-
             width: parent ? parent.width : 0
             height: 44
             radius: 8
             color: devMa.containsMouse ? Theme.glassHover : Theme.glass
+            border.width: 1
+            border.color: devRowRoot.modelData.def ? Theme.alpha(Theme.accent, 0.6) : (devMa.containsMouse ? Qt.rgba(1, 1, 1, 0.16) : Theme.stroke)
+            scale: devMa.pressed ? 0.97 : (devMa.containsMouse ? 1.01 : 1.0)
 
-            Behavior on color {
-                ColorAnimation {
-                    duration: 120
-                }
-            }
+            Behavior on color { ColorAnimation { duration: 120 } }
+            Behavior on border.color { ColorAnimation { duration: 140 } }
+            Behavior on scale { NumberAnimation { duration: 110; easing.type: Easing.OutQuad } }
 
             required property var modelData
-            property bool isSource: false
 
             Rectangle {
                 anchors.left: parent.left
@@ -123,24 +122,31 @@ Flickable {
                 height: 8
                 radius: 4
                 color: devRowRoot.modelData.def ? Theme.accent : Qt.rgba(1, 1, 1, 0.2)
+                scale: devRowRoot.modelData.def ? 1.3 : 1.0
+
+                Behavior on scale { NumberAnimation { duration: 140; easing.type: Easing.OutBack } }
+                Behavior on color { ColorAnimation { duration: 140 } }
             }
 
             Text {
                 anchors.left: parent.left
-                anchors.leftMargin: 34
+                anchors.leftMargin: devMa.containsMouse ? 38 : 34
                 anchors.verticalCenter: parent.verticalCenter
                 anchors.right: parent.right
                 anchors.rightMargin: 14
                 text: devRowRoot.modelData.name
                 font.family: Theme.fontFamily
                 font.pixelSize: 13
+                font.weight: devRowRoot.modelData.def ? Font.DemiBold : Font.Normal
                 elide: Text.ElideRight
                 color: devRowRoot.modelData.def ? Theme.text : Theme.textDim
+
+                Behavior on anchors.leftMargin { NumberAnimation { duration: 120; easing.type: Easing.OutCubic } }
+                Behavior on color { ColorAnimation { duration: 120 } }
             }
 
             MouseArea {
                 id: devMa
-
                 anchors.fill: parent
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
@@ -154,12 +160,12 @@ Flickable {
 
     Column {
         id: col
-
         width: root.width
-        spacing: 10
+        spacing: 12
 
+        // Output Sound
         Text {
-            text: "ВЫВОД"
+            text: I18n.t("output")
             font.family: Theme.fontFamily
             font.pixelSize: 11
             font.letterSpacing: 2
@@ -186,13 +192,64 @@ Flickable {
             delegate: devRow
         }
 
-        Item {
-            width: 1
-            height: 8
+        // Test Sound Button
+        Rectangle {
+            width: parent.width
+            height: 42
+            radius: 8
+            color: testSoundMa.containsMouse ? Theme.glassHover : Theme.glass
+            border.width: 1
+            border.color: root.playingTest ? Theme.accent : (testSoundMa.containsMouse ? Theme.alpha(Theme.accent, 0.6) : Theme.stroke)
+            scale: testSoundMa.pressed ? 0.96 : (testSoundMa.containsMouse ? 1.01 : 1.0)
+
+            Behavior on color { ColorAnimation { duration: 120 } }
+            Behavior on border.color { ColorAnimation { duration: 140 } }
+            Behavior on scale { NumberAnimation { duration: 110; easing.type: Easing.OutQuad } }
+
+            SequentialAnimation on color {
+                running: root.playingTest
+                loops: Animation.Infinite
+                ColorAnimation { to: Theme.alpha(Theme.accent, 0.3); duration: 300 }
+                ColorAnimation { to: Theme.glass; duration: 300 }
+            }
+
+            Row {
+                anchors.centerIn: parent
+                spacing: 8
+
+                Text {
+                    text: "\uf025"
+                    font.family: Theme.iconFont
+                    font.pixelSize: 13
+                    color: Theme.accent
+                    scale: root.playingTest ? 1.25 : 1.0
+
+                    Behavior on scale { NumberAnimation { duration: 140; easing.type: Easing.OutBack } }
+                }
+
+                Text {
+                    text: root.playingTest ? I18n.t("playing_test") : I18n.t("test_sound")
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 12
+                    font.weight: Font.DemiBold
+                    color: root.playingTest ? Theme.accent : Theme.text
+                }
+            }
+
+            MouseArea {
+                id: testSoundMa
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.playTestSound()
+            }
         }
 
+        Item { width: 1; height: 6 }
+
+        // Input Sound (Microphone)
         Text {
-            text: "ВХОД"
+            text: I18n.t("input")
             font.family: Theme.fontFamily
             font.pixelSize: 11
             font.letterSpacing: 2

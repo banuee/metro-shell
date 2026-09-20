@@ -6,22 +6,24 @@ import Quickshell.Io
 // процесс фолловера один на шелл.
 QtObject {
     property string playStatus: "stopped"
-    property string title: "Ничего не играет"
+    property string title: I18n.t("nothing_playing")
     property string artist: ""
     property string artUrl: ""      // полный url (file://...), готов для Image.source
     property real length: 0
     property real pos: 0
 
-    readonly property bool idle: playStatus !== "playing" && playStatus !== "paused" && title === "Ничего не играет"
+    readonly property bool idle: playStatus !== "playing" && playStatus !== "paused" && (title === "Ничего не играет" || title === "Nothing playing" || title === I18n.t("nothing_playing") || title === "")
 
     function act(cmd) {
-        pAction.command = ["playerctl", cmd]
+        // см. metro/Media.qml: разбиваем на argv, иначе составные
+        // команды уходят одним аргументом
+        pAction.command = ["playerctl"].concat(String(cmd).split(" "))
         pAction.running = true
     }
 
     function seek(sec) {
         Media.pos = Math.max(0, sec)
-        pSeek.command = ["sh", "-c", "playerctl position " + Math.round(sec)]
+        pSeek.command = ["playerctl", "position", String(Math.round(sec))]
         pSeek.running = true
     }
 

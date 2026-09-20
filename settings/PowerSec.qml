@@ -8,7 +8,6 @@ Flickable {
     contentHeight: col.height + 8
     boundsBehavior: Flickable.StopAtBounds
 
-
     property var win
     property string profile: ""
     property string batCap: ""
@@ -24,7 +23,6 @@ Flickable {
 
     Process {
         id: pProf
-
         stdout: StdioCollector {
             onStreamFinished: root.profile = text.trim()
         }
@@ -32,7 +30,6 @@ Flickable {
 
     Process {
         id: pBat
-
         stdout: StdioCollector {
             onStreamFinished: {
                 const m = text.match(/cap=(\S*)/)
@@ -60,12 +57,11 @@ Flickable {
 
     Column {
         id: col
-
         width: root.width
         spacing: 10
 
         Text {
-            text: "ПРОФИЛЬ ПИТАНИЯ"
+            text: I18n.t("power_profile")
             font.family: Theme.fontFamily
             font.pixelSize: 11
             font.letterSpacing: 2
@@ -78,35 +74,24 @@ Flickable {
 
             Repeater {
                 model: [
-                {
-                    id: "performance",
-                    label: "производительность",
-                    glyph: "\uf0e7"
-                },
-                {
-                    id: "balanced",
-                    label: "баланс",
-                    glyph: "\uf185"
-                },
-                {
-                    id: "power-saver",
-                    label: "экономия",
-                    glyph: "\uf06c"
-                }]
+                    { id: "performance", label: I18n.t("performance"), glyph: "\uf0e7" },
+                    { id: "balanced", label: I18n.t("balanced"), glyph: "\uf185" },
+                    { id: "power-saver", label: I18n.t("power_saver"), glyph: "\uf06c" }
+                ]
 
                 Rectangle {
                     id: profTile
-
                     width: (parent.width - 2 * 8) / 3
                     height: 76
                     radius: 10
-                    color: root.profile === profTile.modelData.id ? Theme.alpha(Theme.accent, 0.88) : Theme.glass
+                    color: root.profile === profTile.modelData.id ? Theme.alpha(Theme.accent, 0.88) : (profMa.containsMouse ? Theme.glassHover : Theme.glass)
+                    border.width: 1
+                    border.color: root.profile === profTile.modelData.id ? "#ffffff" : (profMa.containsMouse ? Theme.alpha(Theme.accent, 0.4) : Theme.stroke)
+                    scale: profMa.pressed ? 0.93 : (profMa.containsMouse ? 1.04 : 1.0)
 
-                    Behavior on color {
-                        ColorAnimation {
-                            duration: 160
-                        }
-                    }
+                    Behavior on color { ColorAnimation { duration: 160 } }
+                    Behavior on border.color { ColorAnimation { duration: 140 } }
+                    Behavior on scale { NumberAnimation { duration: 120; easing.type: Easing.OutBack } }
 
                     required property var modelData
 
@@ -119,19 +104,25 @@ Flickable {
                             text: profTile.modelData.glyph
                             font.family: Theme.iconFont
                             font.pixelSize: 20
-                            color: root.profile === profTile.modelData.id ? "#ffffff" : Theme.textDim
+                            color: root.profile === profTile.modelData.id ? "#ffffff" : (profMa.containsMouse ? Theme.accent : Theme.textDim)
+                            scale: profMa.containsMouse ? 1.15 : 1.0
+                            Behavior on scale { NumberAnimation { duration: 140; easing.type: Easing.OutBack } }
+                            Behavior on color { ColorAnimation { duration: 120 } }
                         }
                         Text {
                             anchors.horizontalCenter: parent.horizontalCenter
                             text: profTile.modelData.label
                             font.family: Theme.fontFamily
                             font.pixelSize: 11
+                            font.weight: root.profile === profTile.modelData.id ? Font.DemiBold : Font.Normal
                             color: root.profile === profTile.modelData.id ? "#ffffff" : Theme.textDim
                         }
                     }
 
                     MouseArea {
+                        id: profMa
                         anchors.fill: parent
+                        hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
                         onClicked: {
                             root.win.run("powerprofilesctl set " + profTile.modelData.id)
@@ -144,7 +135,6 @@ Flickable {
 
         Timer {
             id: delay
-
             interval: 600
             onTriggered: refresh()
         }
@@ -155,7 +145,7 @@ Flickable {
         }
 
         Text {
-            text: "БАТАРЕЯ"
+            text: I18n.t("battery")
             font.family: Theme.fontFamily
             font.pixelSize: 11
             font.letterSpacing: 2
@@ -186,13 +176,13 @@ Flickable {
                 spacing: 3
 
                 Text {
-                    text: root.batStatus === "" ? "не найдена" : (root.adp === "1" ? "от сети · " : "") + root.batStatus
+                    text: root.batStatus === "" ? I18n.t("not_found") : (root.adp === "1" ? I18n.t("on_ac") : "") + root.batStatus
                     font.family: Theme.fontFamily
                     font.pixelSize: 14
                     color: Theme.text
                 }
                 Text {
-                    text: root.adp === "1" ? "адаптер подключен" : "от батареи"
+                    text: root.adp === "1" ? I18n.t("ac_connected") : I18n.t("on_battery")
                     font.family: Theme.fontFamily
                     font.pixelSize: 11
                     color: Theme.textDim

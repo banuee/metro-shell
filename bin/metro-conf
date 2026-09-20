@@ -1,0 +1,152 @@
+#!/usr/bin/env python3
+"""metro-conf — reader/writer for the single metro-shell.conf.
+
+  metro-conf get <key>        show value (dotted keys)
+  metro-conf set <key> <val>  write (comments and file format are kept)
+  metro-conf list               all keys = values
+  metro-conf apply              regenerate everything from config (themes + hyprland)
+  metro-conf status             human-readable status of the whole shell
+
+Keys: theme, accent, panel.toppanel_bg, panel.launcher_radius, ...
+       settings.glass, fonts.family, compositor.rounding, compositor.blur
+"""
+import os
+import re
+import subprocess
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from metro_conf import CONF, DEFAULTS, load  # noqa: E402
+
+STATE_DIR = os.path.expanduser("~/.local/state/metro")
+
+
+def cmd_get(key):
+    cfg = load()
+    if key in cfg:
+        print(cfg[key])
+    else:
+        print(f"[metro-conf] unknown key: {key}", file=sys.stderr)
+        sys.exit(1)
+
+
+def cmd_list():
+    cfg = load()
+    for k in sorted(cfg):
+        print(f"{k} = {cfg[k]}")
+
+
+def cmd_set(key, value):
+    if key not in DEFAULTS:
+        print(f"[metro-conf] unknown key: {key} (known: {', '.join(sorted(DEFAULTS))})",
+              file=sys.stderr)
+        sys.exit(1)
+    if not os.path.isfile(CONF):
+        print(f"[metro-conf] no config file: {CONF}", file=sys.stderr)
+        sys.exit(1)
+    with open(CONF, encoding="utf-8") as f:
+        lines = f.readlines()
+    # ищем строку ключа внутри правильной секции (или плоский ключ)
+    parts = key.split(".")
+    target = parts[-1]
+    want_section = parts[:-1]
+    stack = []
+    done = False
+    for i, raw in enumerate(lines):
+        s = raw.strip()
+        m = re.match(r"^([A-Za-z0-9_.-]+)\s*\{\s*(?:#.*)?$", s)
+        if m:
+            stack.append(m.group(1))
+            continue
+        if s == "}":
+            if stack:
+                stack.pop()
+            continue
+        m = re.match(r"^([A-Za-z0-9_.-]+)\s*=", s)
+        if m and m.group(1) == target and stack == want_section:
+            indent = raw[:len(raw) - len(raw.lstrip())]
+            lines[i] = f"{indent}{target} = {value}\n"
+            done = True
+            break
+    if not done:
+        print(f"[metro-conf] key not found in file structure: {key}", file=sys.stderr)
+        sys.exit(1)
+    with open(CONF, "w", encoding="utf-8") as f:
+        f.writelines(lines)
+    print(f"{key} = {value}")
+
+
+def cmd_status():
+    cfg = load()
+
+    def state(name, default="—"):
+        p = os.path.join(STATE_DIR, name)
+        try:
+            return open(p).read().strip() or default
+        except OSError:
+            return default
+
+    def hex_file(path):
+        try:
+            import re as _re
+            m = _re.search(r'readonly property color teal:\s*"([^"]+)"', open(path).read())
+            return m.group(1) if m else "?"
+        except OSError:
+            return "?"
+
+    q = os.path.expanduser("~/.config/quickshell")
+    print(f"theme      : {cfg['theme']}  (state: {state('theme')})")
+    print(f"accent     : {cfg['accent']}  (live: {hex_file(q + '/metro/Theme.qml')})")
+    print(f"wallpaper  : {state('wall')}")
+    try:
+        import json as _j
+        pal = _j.load(open(os.path.join(STATE_DIR, "palette.json")))
+        print(f"palette    : {' '.join(pal)}")
+    except (OSError, ValueError):
+        print("palette    : —")
+    print(f"panels     : top bg {cfg['panel.toppanel_bg']} r{cfg['panel.toppanel_radius']} / "
+          f"left bg {cfg['panel.launcher_bg']} r{cfg['panel.launcher_radius']} / "
+          f"right bg {cfg['panel.control_bg']} r{cfg['panel.control_radius']}")
+    print(f"settings   : glass {cfg['settings.glass']}")
+    print(f"fonts      : {cfg['fonts.family']} / {cfg['fonts.headline']}")
+    print(f"compositor : rounding {cfg['compositor.rounding']}, blur {cfg['compositor.blur']}")
+
+
+def cmd_apply():
+    r = subprocess.run(["metro-colors", "--from-conf"], capture_output=True, text=True)
+    sys.stdout.write(r.stdout)
+    sys.stderr.write(r.stderr)
+    sys.exit(r.returncode)
+
+
+def main():
+    a = sys.argv[1:]
+    if not a or a[0] in ("help", "--help", "-h"):
+        print(__doc__)
+        return
+    if a[0] == "get" and len(a) == 2:
+        cmd_get(a[1])
+    elif a[0] == "set" and len(a) >= 3:
+        rest = a[1:]
+        no_apply = "--no-apply" in rest
+        val_args = [x for x in rest if x != "--no-apply"]
+        if len(val_args) != 2:
+            print(__doc__)
+            sys.exit(1)
+        cmd_set(val_args[0], val_args[1])
+        # живые ключи сразу применяются без лишних движений
+        if not no_apply and (val_args[0] in ("theme", "accent") or val_args[0].startswith(("panel.", "settings.", "fonts.", "compositor."))):
+            cmd_apply()
+    elif a[0] == "list" and len(a) == 1:
+        cmd_list()
+    elif a[0] == "apply" and len(a) == 1:
+        cmd_apply()
+    elif a[0] == "status" and len(a) == 1:
+        cmd_status()
+    else:
+        print(__doc__)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

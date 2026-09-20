@@ -21,7 +21,10 @@ Item {
         const out = []
         let cur = ""
         for (let i = 0; i < line.length; i++) {
-            if (line[i] === "\\" && line[i + 1] === ":") {
+            if (line[i] === "\\" && line[i + 1] === "\\") {
+                cur += "\\"
+                i++
+            } else if (line[i] === "\\" && line[i + 1] === ":") {
                 cur += ":"
                 i++
             } else if (line[i] === ":") {
@@ -40,25 +43,23 @@ Item {
         pDev.running = true
     }
 
-    function esc(s) {
-        return s.replace(/\\/g, "\\\\").replace(/"/g, "\\\"")
-    }
-
     function connect(ssid, pass) {
         connectingSsid = ssid
-        status = "Подключение к " + ssid + "..."
-        let cmd = "nmcli dev wifi connect \"" + esc(ssid) + "\""
+        status = I18n.t("connecting_to") + " " + ssid + "..."
+        // argv, без sh: SSID/пароль уходят отдельными аргументами nmcli,
+        // подстановки shell невозможны даже при враждебном SSID из эфира
+        let args = ["nmcli", "dev", "wifi", "connect", ssid]
         if (pass !== "")
-            cmd += " password \"" + esc(pass) + "\""
-        pConnect.command = ["sh", "-c", cmd]
+            args.push("password", pass)
+        pConnect.command = args
         pConnect.running = true
     }
 
     function disconnect() {
         if (wifiDev === "")
             return
-        status = "Отключение..."
-        pConnect.command = ["sh", "-c", "nmcli dev disconnect " + wifiDev]
+        status = I18n.t("disconnecting")
+        pConnect.command = ["nmcli", "dev", "disconnect", wifiDev]
         pConnect.running = true
     }
 
@@ -131,7 +132,7 @@ Item {
 
                 Text {
                     anchors.verticalCenter: parent.verticalCenter
-                    text: "Сети"
+                    text: I18n.t("networks")
                     font.family: Theme.fontFamily
                     font.pixelSize: 13
                     font.weight: Font.DemiBold
@@ -209,7 +210,7 @@ Item {
                         glyph: "\uf021"
                         onActivated: {
                             pRescan.running = true
-                            status = "Поиск сетей..."
+                            status = I18n.t("searching_networks")
                         }
                     }
                 }
@@ -337,7 +338,7 @@ Item {
                                     visible: passInput.text === "" && !passInput.activeFocus
                                     anchors.left: parent.left
                                     anchors.verticalCenter: parent.verticalCenter
-                                    text: "пароль " + root.pendingSsid
+                                    text: I18n.t("password") + " " + root.pendingSsid
                                     font.family: Theme.fontFamily
                                     font.pixelSize: 12
                                     color: Theme.textDim
@@ -403,7 +404,7 @@ Item {
                     Text {
                         width: netsCol.width
                         visible: root.networks.length === 0
-                        text: !root.wifiOn ? "Wi-Fi выключен" : "Сети не найдены"
+                        text: !root.wifiOn ? I18n.t("wifi_off") : I18n.t("no_networks")
                         font.family: Theme.fontFamily
                         font.pixelSize: 12
                         color: Theme.textDim
@@ -434,7 +435,7 @@ Item {
                     })
                 }
                 root.networks = list
-                if (root.status.indexOf("Поиск") === 0)
+                if (root.status.indexOf("Search") === 0 || root.status.indexOf("Поиск") === 0 || root.status === I18n.t("searching_networks"))
                     root.status = ""
             }
         }

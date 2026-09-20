@@ -3,98 +3,96 @@ import QtQuick
 Rectangle {
     id: root
 
-    width: parent ? parent.width : 0
-    height: 44
-    radius: 8
-    color: Theme.glass
-
     property string icon: ""
     property real value: 0.5
     property bool muted: false
     signal changed(real v)
     signal tapped()
 
+    width: parent ? parent.width : 0
+    height: 48
+    radius: Theme.radius
+    color: Theme.glass
+    border.width: 1
+    border.color: root.muted ? Theme.alpha(Theme.red, 0.6) : Theme.stroke
+    clip: true
+
+    Behavior on border.color { ColorAnimation { duration: 140 } }
+
     function apply(x) {
-        root.changed(Math.max(0.01, Math.min(1, x / groove.width)))
+        root.changed(Math.max(0.0, Math.min(1.0, x / Math.max(1, root.width))))
     }
 
-    Text {
-        anchors.left: parent.left
-        anchors.leftMargin: 14
-        anchors.verticalCenter: parent.verticalCenter
-        text: root.icon
-        font.family: Theme.iconFont
-        font.pixelSize: 15
-        color: root.muted ? Theme.red : Theme.text
-    }
-
-    // дорожка
+    // Filled Track
     Rectangle {
-        anchors.left: parent.left
-        anchors.leftMargin: 46
-        anchors.right: parent.right
-        anchors.rightMargin: 58
-        anchors.verticalCenter: parent.verticalCenter
-        height: 4
-        radius: 2
-        color: Theme.glassHover
-
-        Rectangle {
-            width: parent.width * root.value
-            height: parent.height
-            radius: 2
-            color: root.muted ? Theme.red : Theme.accent
+        anchors {
+            left: parent.left
+            top: parent.top
+            bottom: parent.bottom
         }
+        width: Math.max(height, parent.width * root.value)
+        radius: Theme.radius
+        color: root.muted ? Theme.alpha(Theme.red, 0.85) : Theme.alpha(Theme.accent, 0.85)
 
-        Rectangle {
-            x: parent.width * root.value - width / 2
-            anchors.verticalCenter: parent.verticalCenter
-            width: ma.containsMouse || ma.pressed ? 14 : 0
-            height: 14
-            radius: 7
-            color: "#ffffff"
+        Behavior on width {
+            NumberAnimation { duration: 60; easing.type: Easing.OutQuad }
+        }
+        Behavior on color {
+            ColorAnimation { duration: 140 }
+        }
+    }
 
-            Behavior on width {
-                NumberAnimation {
-                    duration: 120
-                }
-            }
+    // Icon button on left
+    Item {
+        id: iconBox
+        anchors {
+            left: parent.left
+            top: parent.top
+            bottom: parent.bottom
+        }
+        width: 44
+        z: 2
+
+        Text {
+            anchors.centerIn: parent
+            text: root.icon
+            font.family: Theme.iconFont
+            font.pixelSize: 15
+            color: root.muted ? Theme.textDim : Theme.text
         }
 
         MouseArea {
-            id: ma
-
+            id: iconMa
             anchors.fill: parent
-            anchors.margins: -10
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
-
-            property bool dragged: false
-
-            onPressed: {
-                dragged = false
-                apply(mouse.x)
-            }
-            onPositionChanged: mouse => {
-                if (pressed) {
-                    dragged = true
-                    apply(mouse.x)
-                }
-            }
-            onClicked: {
-                if (!dragged)
-                    root.tapped()
-            }
+            onClicked: root.tapped()
         }
     }
 
+    // Value percentage text on right
     Text {
-        anchors.right: parent.right
-        anchors.rightMargin: 14
-        anchors.verticalCenter: parent.verticalCenter
-        text: root.muted ? "выкл" : Math.round(root.value * 100) + "%"
+        anchors {
+            right: parent.right
+            rightMargin: 16
+            verticalCenter: parent.verticalCenter
+        }
+        z: 2
+        text: Math.round(root.value * 100) + "%"
         font.family: Theme.fontFamily
         font.pixelSize: 12
-        color: root.muted ? Theme.red : Theme.textDim
+        font.weight: Font.DemiBold
+        color: root.muted ? Theme.textDim : Theme.text
+    }
+
+    MouseArea {
+        id: ma
+        anchors.fill: parent
+        hoverEnabled: true
+        cursorShape: Qt.PointingHandCursor
+        onPressed: mouse => root.apply(mouse.x)
+        onPositionChanged: mouse => {
+            if (pressed) root.apply(mouse.x)
+        }
     }
 }

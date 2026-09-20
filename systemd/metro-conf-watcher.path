@@ -1,0 +1,10 @@
+[Unit]
+Description=Metro Shell — rebuild themes on metro-shell.conf edit
+
+[Path]
+PathChanged=%h/.config/quickshell/metro-shell.conf
+TriggerLimitIntervalSec=5
+TriggerLimitBurst=2
+
+[Install]
+WantedBy=default.target

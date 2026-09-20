@@ -15,15 +15,33 @@ SettingsWindow {
 
     dialogWidth: 480
 
-    function esc(s) {
-        return s.replace(/\\/g, "\\\\").replace(/"/g, "\\\"")
+    function connect(ssid, pass) {
+        connectingSsid = ssid
+        status = "Подключение к " + ssid + "..."
+        // argv, без sh: см. WifiMenu.connect
+        let args = ["nmcli", "dev", "wifi", "connect", ssid]
+        if (pass !== "")
+            args.push("password", pass)
+        pConnect.command = args
+        pConnect.running = true
+    }
+
+    function disconnect() {
+        if (wifiDev === "")
+            return
+        status = "Отключение..."
+        pConnect.command = ["nmcli", "dev", "disconnect", wifiDev]
+        pConnect.running = true
     }
 
     function splitLine(line) {
         const out = []
         let cur = ""
         for (let i = 0; i < line.length; i++) {
-            if (line[i] === "\\" && line[i + 1] === ":") {
+            if (line[i] === "\\" && line[i + 1] === "\\") {
+                cur += "\\"
+                i++
+            } else if (line[i] === "\\" && line[i + 1] === ":") {
                 cur += ":"
                 i++
             } else if (line[i] === ":") {
@@ -40,24 +58,6 @@ SettingsWindow {
     function refresh() {
         pList.running = true
         pDev.running = true
-    }
-
-    function connect(ssid, pass) {
-        connectingSsid = ssid
-        status = "Подключение к " + ssid + "..."
-        let cmd = "nmcli dev wifi connect \"" + esc(ssid) + "\""
-        if (pass !== "")
-            cmd += " password \"" + esc(pass) + "\""
-        pConnect.command = ["sh", "-c", cmd]
-        pConnect.running = true
-    }
-
-    function disconnect() {
-        if (wifiDev === "")
-            return
-        status = "Отключение..."
-        pConnect.command = ["sh", "-c", "nmcli dev disconnect " + wifiDev]
-        pConnect.running = true
     }
 
     Process {
@@ -228,6 +228,7 @@ SettingsWindow {
             height: Math.min(root.networks.length, 7) * 38 + (root.pendingSsid !== "" ? 46 : 0)
 
             Flickable {
+                id: flick
                 anchors.fill: parent
                 clip: true
                 contentHeight: netsCol.height

@@ -1,30 +1,22 @@
--- ~/.config/hypr/hyprland.lua
-
-hl.monitor({
-    output   = "eDP-2",
-    mode     = "1920x1080@300.00",
-    position = "0x0",
-    scale    = 1,
-})
-hl.monitor({
-    output   = "eDP-1",
-    mode     = "1920x1080@300.00",
-    position = "0x0",
-    scale    = 1,
-})
-hl.monitor({
-    output   = "HDMI-A-2",
-    mode     = "1360x768@300.00",
-    position = "1920x0",
-    scale    = 1,
-})
+-- ~/.config/hypr/hyprland.lua — stock metro-shell config (Hyprland >= 0.56, Lua)
+--
+-- No monitors are set on purpose: Hyprland picks up your hardware itself.
+-- See your modes via `hyprctl monitors` and uncomment if you want:
+--
+-- hl.monitor({
+--     output   = "eDP-1",
+--     mode     = "1920x1080@60.00",
+--     position = "0x0",
+--     scale    = 1,
+-- })
 
 hl.env("XCURSOR_SIZE", "10")
 hl.env("QT_QPA_PLATFORMTHEME", "gtk3")
+hl.env("PATH", os.getenv("HOME") .. "/.local/bin:" .. (os.getenv("PATH") or "/usr/local/bin:/usr/bin:/bin"))
 
 hl.on("hyprland.start", function()
-    hl.exec_cmd("/usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1")
-    hl.exec_cmd("quickshell -p " .. os.getenv("HOME") .. "/.config/quickshell/metro")
+    hl.exec_cmd("sh -c 'for a in /usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1 /usr/libexec/polkit-gnome-authentication-agent-1; do [ -x $a ] && exec $a; done'")
+    hl.exec_cmd(os.getenv("HOME") .. "/.local/bin/qs-metro")
     hl.exec_cmd("hypridle")
     hl.exec_cmd("wl-paste --type text --watch cliphist store")
     hl.exec_cmd("wl-paste --type image --watch cliphist store")
@@ -35,7 +27,7 @@ hl.config({
     general = {
         gaps_in     = 10,
         gaps_out    = 10,
-        border_size = 0,
+        border_size       = 0,
         col = {
             active_border   = "rgba(ffffffff)",
             inactive_border = "rgba(ffffffff)",
@@ -44,7 +36,7 @@ hl.config({
         allow_tearing = false,
     },
     decoration = {
-        rounding       = 20,
+        rounding       = 12,
         rounding_power = 2,
         active_opacity   = 1.0,
         inactive_opacity = 1.0,
@@ -54,7 +46,7 @@ hl.config({
         blur = {
             enabled    = true,
             size       = 3,
-            passes     = 3,
+            passes     = 2,
             noise      = 0.02,
             contrast   = 0.85,
             brightness = 1,
@@ -71,13 +63,13 @@ hl.curve("Tag",   { type = "bezier", points = { {0.4,  0},    {0.2,  1}    } })
 hl.curve("Close", { type = "bezier", points = { {0.46, 1.0},  {0.29, 0.99} } })
 hl.curve("Focus", { type = "bezier", points = { {0.46, 1.0},  {0.29, 0.99} } })
 
-hl.animation({ leaf = "windows",    enabled = true, speed = 3.5, bezier = "Move"  })
+hl.animation({ leaf = "windows",    enabled = true, speed = 3, bezier = "Move"  })
 hl.animation({ leaf = "windowsIn",  enabled = true, speed = 3.5, bezier = "Open",  style = "popin 70%" })
-hl.animation({ leaf = "windowsOut", enabled = true, speed = 3.0, bezier = "Close", style = "popin 20%" })
-hl.animation({ leaf = "border",     enabled = true, speed = 3.0, bezier = "Focus" })
+hl.animation({ leaf = "windowsOut", enabled = true, speed = 3.5, bezier = "Close", style = "popin 20%" })
+hl.animation({ leaf = "border",     enabled = true, speed = 3.5, bezier = "Focus" })
 hl.animation({ leaf = "fadeIn",     enabled = true, speed = 3.5, bezier = "Open"  })
-hl.animation({ leaf = "fadeOut",    enabled = true, speed = 3.0, bezier = "Close" })
-hl.animation({ leaf = "workspaces", enabled = true, speed = 4.0, bezier = "Tag", style = "slide" })
+hl.animation({ leaf = "fadeOut",    enabled = true, speed = 3.5, bezier = "Close" })
+hl.animation({ leaf = "workspaces", enabled = true, speed = 3.5, bezier = "Tag", style = "slide" })
 hl.animation({ leaf = "layers", enabled = true, speed = 3.5, bezier = "Open", style = "slide" })
 
 hl.config({
@@ -120,12 +112,14 @@ hl.config({
 
 local mainMod = "SUPER"
 
-hl.bind(mainMod .. " + B", hl.dsp.exec_cmd("chromium"))
+-- Stock apps (installed everywhere by the installer): firefox, kitty, nemo.
+-- Add your own binds below following the pattern.
+hl.bind(mainMod .. " + B", hl.dsp.exec_cmd("firefox"))
 hl.bind(mainMod .. " + T", hl.dsp.exec_cmd("kitty"))
 hl.bind(mainMod .. " + E", hl.dsp.exec_cmd("nemo"))
-hl.bind(mainMod .. " + J", hl.dsp.exec_cmd("steam"))
-hl.bind(mainMod .. " + S", hl.dsp.exec_cmd("vscodium"))
-hl.bind(mainMod .. " + Print", hl.dsp.exec_cmd("hyprshot-gui"))
+hl.bind("Print", hl.dsp.exec_cmd("~/.local/bin/metro-shot"))
+hl.bind(mainMod .. " + Print", hl.dsp.exec_cmd("~/.local/bin/metro-shot"))
+hl.bind(mainMod .. " + SHIFT + S", hl.dsp.exec_cmd("~/.local/bin/metro-shot area"))
 hl.bind(mainMod .. " + L", hl.dsp.exec_cmd("~/.local/bin/metro-lock"))
 
 
@@ -188,4 +182,29 @@ hl.layer_rule({
     match = { namespace = "quickshell:metro" },
     blur  = true,
     ignore_alpha = 0.2,
+})
+
+hl.layer_rule({
+    name  = "metro-glass-shot",
+    match = { namespace = "quickshell:metro-shot" },
+    blur  = true,
+    ignore_alpha = 0.2,
+})
+
+hl.window_rule({
+    name  = "metro-settings",
+    match = { class = "org.quickshell" },
+    float  = true,
+})
+
+hl.layer_rule({
+    name  = "slurp-noanim",
+    match = { namespace = "selection" },
+    no_anim = true,
+})
+
+hl.layer_rule({
+    name  = "slurp-noanim-2",
+    match = { namespace = "slurp" },
+    no_anim = true,
 })

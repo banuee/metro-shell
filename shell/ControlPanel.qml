@@ -21,6 +21,8 @@ PanelBase {
     property string ssid: ""
     property bool btOn: false
     property bool micMuted: false
+    property bool dndActive: false
+    property string powerProfile: "balanced"
     property int battery: 0
     property bool charging: false
     property bool wifiMenuOpen: false
@@ -33,6 +35,10 @@ PanelBase {
     function dismissNotif(nid) {
         const h = Object.assign({}, root.notifHidden)
         h[nid] = true
+        // cap: словарь только рос за сессию — режем старые ключи
+        const ks = Object.keys(h)
+        if (ks.length > 500)
+            ks.slice(0, ks.length - 500).forEach(k => delete h[k])
         root.notifHidden = h
         for (let i = 0; i < notifModel.count; i++) {
             if (notifModel.get(i).nid === nid) {
@@ -46,8 +52,23 @@ PanelBase {
         const h = Object.assign({}, root.notifHidden)
         for (let i = 0; i < notifModel.count; i++)
             h[notifModel.get(i).nid] = true
+        const ks = Object.keys(h)
+        if (ks.length > 500)
+            ks.slice(0, ks.length - 500).forEach(k => delete h[k])
         root.notifHidden = h
         notifModel.clear()
+        root.act("makoctl dismiss -a 2>/dev/null", false)
+    }
+
+    function cyclePowerProfile() {
+        let next = "balanced"
+        if (root.powerProfile === "performance")
+            next = "balanced"
+        else if (root.powerProfile === "balanced")
+            next = "power-saver"
+        else
+            next = "performance"
+        root.act("powerprofilesctl set " + next, true)
     }
 
     signal wifiSettingsRequested()
@@ -79,13 +100,16 @@ PanelBase {
     readonly property bool playerVisible: !Media.idle
 
     function refresh() {
-        pVolGet.running = true
-        pBriGet.running = true
-        pWifiGet.running = true
-        pBtGet.running = true
-        pMicGet.running = true
-        pBatGet.running = true
-        pNotif.running = true
+        const go = p => { if (!p.running) p.running = true }
+        go(pVolGet)
+        go(pBriGet)
+        go(pWifiGet)
+        go(pBtGet)
+        go(pMicGet)
+        go(pDndGet)
+        go(pPowerGet)
+        go(pBatGet)
+        go(pNotif)
     }
 
     function fmtTime(s) {
@@ -151,8 +175,28 @@ PanelBase {
     }
 
     Process {
+        id: pDndGet
+        command: ["sh", "-c", "makoctl mode 2>/dev/null | grep -qw dnd && echo 1 || echo 0"]
+        stdout: SplitParser {
+            onRead: data => root.dndActive = data.trim() === "1"
+        }
+    }
+
+    Process {
+        id: pPowerGet
+        command: ["sh", "-c", "powerprofilesctl get 2>/dev/null || echo ''"]
+        stdout: SplitParser {
+            onRead: data => {
+                const s = data.trim()
+                if (s !== "")
+                    root.powerProfile = s
+            }
+        }
+    }
+
+    Process {
         id: pBatGet
-        command: ["sh", "-c", "echo c=$(cat /sys/class/power_supply/BAT0/capacity 2>/dev/null || echo 0); echo s=$(cat /sys/class/power_supply/BAT0/status 2>/dev/null)"]
+        command: ["sh", "-c", "b=$(ls -d /sys/class/power_supply/BAT* 2>/dev/null | head -n1); case $b in '') b=/sys/class/power_supply/BAT0;; esac; echo c=$(cat $b/capacity 2>/dev/null || echo 0); echo s=$(cat $b/status 2>/dev/null)"]
         stdout: SplitParser {
             onRead: data => {
                 if (data.startsWith("c="))
@@ -233,8 +277,8 @@ PanelBase {
         }
         x: 0
         width: parent.width + 18
-        radius: Theme.panelRadius
-        color: Theme.bg
+        radius: Theme.panelRightRadius
+        color: Theme.panelRightBg
         border.width: 1
         border.color: Theme.stroke
     }
@@ -274,7 +318,7 @@ PanelBase {
             Text {
                 anchors.left: parent.left
                 anchors.verticalCenter: parent.verticalCenter
-                text: "центр управления"
+                text: I18n.t("control_center")
                 font.family: Theme.fontFamily
                 font.pixelSize: 24
                 font.weight: Font.Light
@@ -286,7 +330,7 @@ PanelBase {
                 anchors.verticalCenter: parent.verticalCenter
                 width: batRow.width + 20
                 height: 30
-                radius: 15
+                radius: Theme.isWP ? 0 : 15
                 color: root.charging ? Theme.alpha(Theme.accent, 0.22) : Theme.glass
 
                 Row {
@@ -319,59 +363,59 @@ PanelBase {
 
             TileFrame {
                 width: Theme.tileW(2)
-                height: Theme.tileH(1)
-                color: root.wifiOn ? Theme.alpha(Theme.accent, Theme.tileAlpha) : Qt.rgba(1, 1, 1, 0.07)
+                height: Theme.isMaterial ? 56 : Theme.tileH(1)
+                radius: Theme.isMaterial ? Theme.radiusPill : Theme.radius
+                color: root.wifiOn ? (Theme.isMaterial ? Theme.primary : Theme.alpha(Theme.accent, Theme.tileAlpha)) : (Theme.isMaterial ? Theme.surface_container_high : Theme.glass)
                 onClicked: root.toggleWifiMenu()
 
                 Text {
                     anchors {
                         left: parent.left
-                        leftMargin: 14
+                        leftMargin: Theme.isMaterial ? 16 : 14
                         verticalCenter: parent.verticalCenter
                     }
                     text: root.wifiOn ? "\uf1eb" : String.fromCodePoint(0xf092d)
                     font.family: Theme.iconFont
-                    font.pixelSize: 26
-                    color: Theme.text
+                    font.pixelSize: Theme.isMaterial ? 20 : 26
+                    color: Theme.isMaterial ? (root.wifiOn ? Theme.on_primary : Theme.on_surface_variant) : Theme.text
                 }
 
                 Column {
                     anchors {
                         left: parent.left
-                        leftMargin: 56
+                        leftMargin: Theme.isMaterial ? 50 : 56
                         verticalCenter: parent.verticalCenter
                     }
-                    spacing: 2
+                    spacing: Theme.isMaterial ? 1 : 2
 
                     Text {
                         text: "Wi-Fi"
                         font.family: Theme.fontFamily
-                        font.pixelSize: 14
+                        font.pixelSize: Theme.isMaterial ? 13 : 14
                         font.weight: Font.DemiBold
-                        color: Theme.text
+                        color: Theme.isMaterial ? (root.wifiOn ? Theme.on_primary : Theme.on_surface) : Theme.text
                     }
 
                     Text {
-                        text: root.wifiOn ? (root.ssid !== "" ? root.ssid : "включён") : "выключен"
+                        text: root.wifiOn ? (root.ssid !== "" ? root.ssid : I18n.t("on")) : I18n.t("off")
                         font.family: Theme.fontFamily
                         font.pixelSize: 11
-                        color: Qt.rgba(1, 1, 1, 0.7)
-                        width: 110
+                        color: Theme.isMaterial ? (root.wifiOn ? Theme.alpha(Theme.on_primary, 0.8) : Theme.on_surface_variant) : Theme.textDim
+                        width: 100
                         elide: Text.ElideRight
                     }
                 }
 
-                // стрелка-подсказка: раскрытие вниз
                 Text {
                     anchors {
                         right: parent.right
-                        rightMargin: 12
+                        rightMargin: Theme.isMaterial ? 14 : 12
                         verticalCenter: parent.verticalCenter
                     }
                     text: "\uf105"
                     font.family: Theme.iconFont
                     font.pixelSize: 14
-                    color: Qt.rgba(1, 1, 1, 0.5)
+                    color: Theme.isMaterial ? (root.wifiOn ? Theme.alpha(Theme.on_primary, 0.7) : Theme.on_surface_variant) : Theme.textDim
                     rotation: root.wifiMenuOpen ? 90 : 0
 
                     Behavior on rotation {
@@ -385,56 +429,57 @@ PanelBase {
 
             TileFrame {
                 width: Theme.tileW(2)
-                height: Theme.tileH(1)
-                color: root.btOn ? Theme.alpha(Theme.accent, Theme.tileAlpha) : Qt.rgba(1, 1, 1, 0.07)
+                height: Theme.isMaterial ? 56 : Theme.tileH(1)
+                radius: Theme.isMaterial ? Theme.radiusPill : Theme.radius
+                color: root.btOn ? (Theme.isMaterial ? Theme.primary : Theme.alpha(Theme.accent, Theme.tileAlpha)) : (Theme.isMaterial ? Theme.surface_container_high : Theme.glass)
                 onClicked: root.toggleBtMenu()
 
                 Text {
                     anchors {
                         left: parent.left
-                        leftMargin: 14
+                        leftMargin: Theme.isMaterial ? 16 : 14
                         verticalCenter: parent.verticalCenter
                     }
                     text: "\uf294"
                     font.family: Theme.iconFont
-                    font.pixelSize: 26
-                    color: Theme.text
+                    font.pixelSize: Theme.isMaterial ? 20 : 26
+                    color: Theme.isMaterial ? (root.btOn ? Theme.on_primary : Theme.on_surface_variant) : Theme.text
                 }
 
                 Column {
                     anchors {
                         left: parent.left
-                        leftMargin: 56
+                        leftMargin: Theme.isMaterial ? 50 : 56
                         verticalCenter: parent.verticalCenter
                     }
-                    spacing: 2
+                    spacing: Theme.isMaterial ? 1 : 2
 
                     Text {
                         text: "Bluetooth"
                         font.family: Theme.fontFamily
-                        font.pixelSize: 14
+                        font.pixelSize: Theme.isMaterial ? 13 : 14
                         font.weight: Font.DemiBold
-                        color: Theme.text
+                        color: Theme.isMaterial ? (root.btOn ? Theme.on_primary : Theme.on_surface) : Theme.text
                     }
 
                     Text {
-                        text: root.btOn ? "включён" : "выключен"
+                        text: root.btOn ? I18n.t("on") : I18n.t("off")
                         font.family: Theme.fontFamily
                         font.pixelSize: 11
-                        color: Qt.rgba(1, 1, 1, 0.7)
+                        color: Theme.isMaterial ? (root.btOn ? Theme.alpha(Theme.on_primary, 0.8) : Theme.on_surface_variant) : Theme.textDim
                     }
                 }
 
                 Text {
                     anchors {
                         right: parent.right
-                        rightMargin: 12
+                        rightMargin: Theme.isMaterial ? 14 : 12
                         verticalCenter: parent.verticalCenter
                     }
                     text: "\uf105"
                     font.family: Theme.iconFont
                     font.pixelSize: 14
-                    color: Qt.rgba(1, 1, 1, 0.5)
+                    color: Theme.isMaterial ? (root.btOn ? Theme.alpha(Theme.on_primary, 0.7) : Theme.on_surface_variant) : Theme.textDim
                     rotation: root.btMenuOpen ? 90 : 0
 
                     Behavior on rotation {
@@ -464,97 +509,232 @@ PanelBase {
             columns: 2
             spacing: Theme.gap
 
+            // Dual-Theme Slider (Material 3 Pill vs Metro Live 2x1 Tile)
             component SliderTile: TileFrame {
                 id: sliderTile
                 property real value: 0.5
                 property string icon: ""
                 property string title: ""
-                property color fillColor: Theme.teal
+                property color fillColor: Theme.primary
                 signal changed(real v)
-                signal tapped()
+                signal iconClicked()
 
                 width: Theme.tileW(2)
-                height: Theme.tileH(1)
+                height: Theme.isMaterial ? 56 : Theme.tileH(1)
+                radius: Theme.isMaterial ? Theme.radiusPill : Theme.radius
+                color: Theme.isMaterial ? Theme.surface_container_highest : Theme.glass
+                clip: true
 
-                Rectangle {
-                    anchors {
-                        left: parent.left
-                        top: parent.top
-                        bottom: parent.bottom
+                // ── Material You Slider (Theme.isMaterial == true) ──
+                Item {
+                    id: matSlider
+                    anchors.fill: parent
+                    visible: Theme.isMaterial
+
+                    // Заливка: в ноль уходит полностью, без круглой заглушки
+                    Rectangle {
+                        id: matFill
+                        anchors {
+                            left: parent.left
+                            top: parent.top
+                            bottom: parent.bottom
+                        }
+                        width: parent.width * sliderTile.value
+                        visible: sliderTile.value > 0.005
+                        radius: Theme.radiusPill
+                        color: sliderTile.fillColor
+
+                        Behavior on width { NumberAnimation { duration: 60; easing.type: Easing.OutQuad } }
                     }
-                    width: parent.width * Math.max(0.03, sliderTile.value)
-                    radius: parent.radius
-                    color: Theme.alpha(sliderTile.fillColor, Theme.tileAlpha)
-                    Behavior on width {
-                        NumberAnimation {
-                            duration: 90
+
+                    Item {
+                        id: matIconBox
+                        anchors {
+                            left: parent.left
+                            top: parent.top
+                            bottom: parent.bottom
+                        }
+                        width: 50
+                        // БЕЗ z: иконка ниже drag-зоны sliderArea — тап по иконке
+                        // проваливается в mute-toggle, а драг идёт на всю ширину
+
+                        Text {
+                            anchors.centerIn: parent
+                            text: sliderTile.icon
+                            font.family: Theme.iconFont
+                            font.pixelSize: 18
+                            // Светлая только пока заливка реально под иконкой
+                            color: (matSlider.width * sliderTile.value) > 25 ? Theme.on_primary : Theme.on_surface
+                        }
+
+                        MouseArea {
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: sliderTile.iconClicked()
+                        }
+                    }
+
+                    // Базовый текст (тёмный, на треке)
+                    Row {
+                        id: matTextRow
+                        anchors {
+                            left: matIconBox.right
+                            right: parent.right
+                            rightMargin: 16
+                            verticalCenter: parent.verticalCenter
+                        }
+                        spacing: 6
+                        z: 1
+
+                        Text {
+                            width: parent.width - 46
+                            text: sliderTile.title
+                            font.family: Theme.fontFamily
+                            font.pixelSize: 13
+                            font.weight: Font.Medium
+                            color: Theme.on_surface
+                            elide: Text.ElideRight
+                        }
+
+                        Text {
+                            text: Math.round(sliderTile.value * 100) + "%"
+                            font.family: Theme.fontFamily
+                            font.pixelSize: 12
+                            font.weight: Font.DemiBold
+                            color: Theme.on_surface
+                        }
+                    }
+
+                    // Knockout-дубль (светлый, виден только над заливкой):
+                    // попиксельный переход вместо ступенек по порогам
+                    Item {
+                        anchors {
+                            left: parent.left
+                            top: parent.top
+                            bottom: parent.bottom
+                        }
+                        width: matFill.width
+                        clip: true
+                        z: 2
+                        visible: matFill.visible
+
+                        Behavior on width { NumberAnimation { duration: 60; easing.type: Easing.OutQuad } }
+
+                        Row {
+                            x: matIconBox.width
+                            width: matTextRow.width
+                            anchors.verticalCenter: parent.verticalCenter
+                            spacing: 6
+
+                            Text {
+                                width: matTextRow.width - 46
+                                text: sliderTile.title
+                                font.family: Theme.fontFamily
+                                font.pixelSize: 13
+                                font.weight: Font.Medium
+                                color: Theme.on_primary
+                                elide: Text.ElideRight
+                            }
+
+                            Text {
+                                text: Math.round(sliderTile.value * 100) + "%"
+                                font.family: Theme.fontFamily
+                                font.pixelSize: 12
+                                font.weight: Font.DemiBold
+                                color: Theme.on_primary
+                            }
                         }
                     }
                 }
 
-                Text {
-                    anchors {
-                        left: parent.left
-                        leftMargin: 14
-                        verticalCenter: parent.verticalCenter
-                    }
-                    text: sliderTile.icon
-                    font.family: Theme.iconFont
-                    font.pixelSize: 24
-                    color: Theme.text
-                }
+                // ── Classic Metro / WP Slider (Theme.isMaterial == false) ──
+                Item {
+                    anchors.fill: parent
+                    visible: !Theme.isMaterial
 
-                Column {
-                    anchors {
-                        left: parent.left
-                        leftMargin: 56
-                        verticalCenter: parent.verticalCenter
-                    }
-                    spacing: 2
-
-                    Text {
-                        text: sliderTile.title
-                        font.family: Theme.fontFamily
-                        font.pixelSize: 14
-                        font.weight: Font.DemiBold
-                        color: Theme.text
+                    Rectangle {
+                        anchors {
+                            left: parent.left
+                            top: parent.top
+                            bottom: parent.bottom
+                        }
+                        width: parent.width * Math.max(0.03, sliderTile.value)
+                        radius: Theme.radius
+                        color: Theme.alpha(sliderTile.fillColor, Theme.tileAlpha)
+                        Behavior on width { NumberAnimation { duration: 90 } }
                     }
 
-                    Text {
-                        text: Math.round(sliderTile.value * 100) + "%"
-                        font.family: Theme.fontFamily
-                        font.pixelSize: 11
-                        color: Qt.rgba(1, 1, 1, 0.7)
+                    Item {
+                        id: metroIconBox
+                        anchors {
+                            left: parent.left
+                            top: parent.top
+                            bottom: parent.bottom
+                        }
+                        width: 48
+                        z: 2
+
+                        Text {
+                            anchors.centerIn: parent
+                            text: sliderTile.icon
+                            font.family: Theme.iconFont
+                            font.pixelSize: 24
+                            color: Theme.text
+                        }
+
+                        MouseArea {
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: sliderTile.iconClicked()
+                        }
+                    }
+
+                    Column {
+                        anchors {
+                            left: parent.left
+                            leftMargin: 56
+                            verticalCenter: parent.verticalCenter
+                        }
+                        spacing: 2
+                        z: 1
+
+                        Text {
+                            text: sliderTile.title
+                            font.family: Theme.fontFamily
+                            font.pixelSize: 14
+                            font.weight: Font.DemiBold
+                            color: Theme.text
+                        }
+
+                        Text {
+                            text: Math.round(sliderTile.value * 100) + "%"
+                            font.family: Theme.fontFamily
+                            font.pixelSize: 11
+                            color: Qt.rgba(1, 1, 1, 0.7)
+                        }
                     }
                 }
 
                 MouseArea {
                     id: sliderArea
-
-                    property real downX: 0
-                    property bool dragged: false
-
                     anchors.fill: parent
                     hoverEnabled: true
-                    onPressed: mouse => {
-                        downX = mouse.x
-                        dragged = false
-                        apply(mouse.x)
-                    }
+                    cursorShape: Qt.PointingHandCursor
+                    property real pressX: -1
+                    onPressed: mouse => { pressX = mouse.x; apply(mouse.x) }
                     onPositionChanged: mouse => {
-                        if (pressed) {
-                            if (Math.abs(mouse.x - downX) > 5)
-                                dragged = true
-                            apply(mouse.x)
-                        }
+                        if (pressed) apply(mouse.x)
                     }
-                    onClicked: {
-                        if (!dragged)
-                            sliderTile.tapped()
+                    // Тап без движения: левая иконка-зона = mute-toggle.
+                    // Конец драга в иконке мут не дёргает (проверяем pressX).
+                    onClicked: mouse => {
+                        if (mouse.x < 54 && pressX >= 0 && pressX < 54) sliderTile.iconClicked()
                     }
 
                     function apply(x) {
-                        sliderTile.changed(Math.max(0.01, Math.min(1, x / sliderTile.width)))
+                        sliderTile.changed(Math.max(0.0, Math.min(1.0, x / sliderTile.width)))
                     }
                 }
             }
@@ -562,20 +742,20 @@ PanelBase {
             SliderTile {
                 value: root.volume / 100
                 icon: root.volMuted ? "\uf026" : "\uf028"
-                title: "Звук" + (root.volMuted ? " (выкл)" : "")
+                title: I18n.t("sound") + (root.volMuted ? " (" + I18n.t("muted") + ")" : "")
                 fillColor: root.volMuted ? Theme.red : Theme.accent
                 onChanged: v => {
                     root.volume = Math.round(v * 100)
                     root.volMuted = false
                     root.act("wpctl set-volume @DEFAULT_AUDIO_SINK@ " + v.toFixed(2) + " && wpctl set-mute @DEFAULT_AUDIO_SINK@ 0")
                 }
-                onTapped: root.act("wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle", true)
+                onIconClicked: root.act("wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle", true)
             }
 
             SliderTile {
                 value: root.brightness / 100
                 icon: String.fromCodePoint(0xe30d)
-                title: "Яркость"
+                title: I18n.t("brightness")
                 fillColor: Theme.accent
                 onChanged: v => {
                     root.brightness = Math.round(v * 100)
@@ -585,54 +765,114 @@ PanelBase {
 
             TileFrame {
                 width: Theme.tileW(2)
-                height: Theme.tileH(1)
-                color: root.micMuted ? Qt.rgba(1, 1, 1, 0.07) : Theme.alpha(Theme.accent, Theme.tileAlpha)
+                height: Theme.isMaterial ? 56 : Theme.tileH(1)
+                radius: Theme.isMaterial ? Theme.radiusPill : Theme.radius
+                color: !root.micMuted ? (Theme.isMaterial ? Theme.primary : Theme.alpha(Theme.accent, Theme.tileAlpha)) : (Theme.isMaterial ? Theme.surface_container_high : Theme.glass)
                 onClicked: root.act("wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle", true)
 
                 Text {
                     anchors {
                         left: parent.left
-                        leftMargin: 14
+                        leftMargin: Theme.isMaterial ? 16 : 14
                         verticalCenter: parent.verticalCenter
                     }
                     text: "\uf130"
                     font.family: Theme.iconFont
-                    font.pixelSize: 26
-                    color: Theme.text
+                    font.pixelSize: Theme.isMaterial ? 20 : 26
+                    color: Theme.isMaterial ? (!root.micMuted ? Theme.on_primary : Theme.on_surface_variant) : Theme.text
                 }
 
                 Column {
                     anchors {
                         left: parent.left
-                        leftMargin: 56
+                        leftMargin: Theme.isMaterial ? 50 : 56
                         verticalCenter: parent.verticalCenter
                     }
-                    spacing: 2
+                    spacing: Theme.isMaterial ? 1 : 2
 
                     Text {
-                        text: "Микрофон"
+                        text: I18n.t("microphone")
                         font.family: Theme.fontFamily
-                        font.pixelSize: 14
+                        font.pixelSize: Theme.isMaterial ? 13 : 14
                         font.weight: Font.DemiBold
-                        color: Theme.text
+                        color: Theme.isMaterial ? (!root.micMuted ? Theme.on_primary : Theme.on_surface) : Theme.text
                     }
 
                     Text {
-                        text: root.micMuted ? "выключен" : "включён"
+                        text: root.micMuted ? I18n.t("off") : I18n.t("on")
                         font.family: Theme.fontFamily
                         font.pixelSize: 11
-                        color: Qt.rgba(1, 1, 1, 0.7)
+                        color: Theme.isMaterial ? (!root.micMuted ? Theme.alpha(Theme.on_primary, 0.8) : Theme.on_surface_variant) : Theme.textDim
                     }
                 }
             }
 
             TileFrame {
                 width: Theme.tileW(2)
-                height: Theme.tileH(1)
-                color: Theme.glass
-                onClicked: root.act("grim \"$HOME/Pictures/Screenshot-$(date +%Y%m%d-%H%M%S).png\"", "")
+                height: Theme.isMaterial ? 56 : Theme.tileH(1)
+                radius: Theme.isMaterial ? Theme.radiusPill : Theme.radius
+                color: root.dndActive ? (Theme.isMaterial ? Theme.primary : Theme.alpha(Theme.accent, Theme.tileAlpha)) : (Theme.isMaterial ? Theme.surface_container_high : Theme.glass)
+                onClicked: root.act("makoctl mode -t dnd 2>/dev/null", true)
 
                 Text {
+                    anchors {
+                        left: parent.left
+                        leftMargin: Theme.isMaterial ? 16 : 14
+                        verticalCenter: parent.verticalCenter
+                    }
+                    text: root.dndActive ? "\uf1f6" : "\uf0f3"
+                    font.family: Theme.iconFont
+                    font.pixelSize: Theme.isMaterial ? 20 : 24
+                    color: Theme.isMaterial ? (root.dndActive ? Theme.on_primary : Theme.on_surface_variant) : Theme.text
+                }
+
+                Column {
+                    anchors {
+                        left: parent.left
+                        leftMargin: Theme.isMaterial ? 50 : 56
+                        verticalCenter: parent.verticalCenter
+                    }
+                    spacing: Theme.isMaterial ? 1 : 2
+
+                    Text {
+                        text: I18n.t("dnd")
+                        font.family: Theme.fontFamily
+                        font.pixelSize: Theme.isMaterial ? 13 : 14
+                        font.weight: Font.DemiBold
+                        color: Theme.isMaterial ? (root.dndActive ? Theme.on_primary : Theme.on_surface) : Theme.text
+                    }
+
+                    Text {
+                        text: root.dndActive ? I18n.t("silent_mode") : I18n.t("notifications_on")
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 11
+                        color: Theme.isMaterial ? (root.dndActive ? Theme.alpha(Theme.on_primary, 0.8) : Theme.on_surface_variant) : Theme.textDim
+                    }
+                }
+            }
+
+            TileFrame {
+                id: shotTile
+                width: Theme.tileW(2)
+                height: Theme.tileH(1)
+                color: shotFlash.opacity > 0 ? Theme.alpha(Theme.accent, 0.35) : Theme.glass
+
+                Item {
+                    anchors.fill: parent
+                    id: shotFlash
+                    opacity: 0
+                    Rectangle {
+                        anchors.fill: parent
+                        radius: Theme.radius
+                        color: Theme.accent
+                    }
+                    Behavior on opacity {
+                        NumberAnimation { duration: 120 }
+                    }
+                }
+
+                Text {
+                    id: shotIcon
                     anchors {
                         left: parent.left
                         leftMargin: 14
@@ -640,8 +880,11 @@ PanelBase {
                     }
                     text: "\uf030"
                     font.family: Theme.iconFont
-                    font.pixelSize: 26
+                    font.pixelSize: 22
                     color: Theme.text
+                    Behavior on scale {
+                        NumberAnimation { duration: 120 }
+                    }
                 }
 
                 Column {
@@ -653,7 +896,7 @@ PanelBase {
                     spacing: 2
 
                     Text {
-                        text: "Снимок экрана"
+                        text: I18n.t("screenshot")
                         font.family: Theme.fontFamily
                         font.pixelSize: 14
                         font.weight: Font.DemiBold
@@ -661,10 +904,72 @@ PanelBase {
                     }
 
                     Text {
-                        text: "в ~/Pictures"
+                        text: "metro-shot"
                         font.family: Theme.fontFamily
                         font.pixelSize: 11
                         color: Qt.rgba(1, 1, 1, 0.7)
+                    }
+                }
+
+                Timer {
+                    id: shotFlashTimer
+                    interval: 180
+                    repeat: false
+                    onTriggered: {
+                        shotFlash.opacity = 0
+                        shotIcon.scale = 1.0
+                    }
+                }
+
+                onClicked: {
+                    shotFlash.opacity = 0.45
+                    shotIcon.scale = 1.25
+                    shotFlashTimer.restart()
+                    root.act("$HOME/.local/bin/metro-shot", "")
+                }
+            }
+
+            TileFrame {
+                width: Theme.tileW(2)
+                height: Theme.tileH(1)
+                color: root.powerProfile === "performance" ? Theme.alpha(Theme.orange, 0.25) : Theme.glass
+                onClicked: root.cyclePowerProfile()
+
+                Text {
+                    anchors {
+                        left: parent.left
+                        leftMargin: 14
+                        verticalCenter: parent.verticalCenter
+                    }
+                    text: root.powerProfile === "performance" ? "\uf0e7" : (root.powerProfile === "power-saver" ? "\uf188" : "\uf240")
+                    font.family: Theme.iconFont
+                    font.pixelSize: 24
+                    color: root.powerProfile === "performance" ? Theme.orange : (root.powerProfile === "power-saver" ? Theme.lime : Theme.accent)
+                }
+
+                Column {
+                    anchors {
+                        left: parent.left
+                        leftMargin: 56
+                        verticalCenter: parent.verticalCenter
+                    }
+                    spacing: 2
+
+                    Text {
+                        text: I18n.t("power_sec")
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 14
+                        font.weight: Font.DemiBold
+                        color: Theme.text
+                    }
+
+                    Text {
+                        text: root.powerProfile === "performance" ? I18n.t("performance") : (root.powerProfile === "power-saver" ? I18n.t("power_saver") : I18n.t("balanced"))
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 11
+                        color: Qt.rgba(1, 1, 1, 0.7)
+                        width: 110
+                        elide: Text.ElideRight
                     }
                 }
             }
@@ -827,17 +1132,15 @@ PanelBase {
         Text {
             anchors.horizontalCenter: parent.horizontalCenter
             visible: root.playerVisible
-            text: Media.playStatus === "playing" ? fmtTime(Media.pos) + " / " + fmtTime(Media.length) : (Media.playStatus === "paused" ? "пауза" : "нет активных плееров")
+            text: Media.playStatus === "playing" ? fmtTime(Media.pos) + " / " + fmtTime(Media.length) : (Media.playStatus === "paused" ? I18n.t("paused") : I18n.t("no_players"))
             font.family: Theme.fontFamily
             font.pixelSize: 11
             color: Theme.textDim
         }
 
-
-        // ─── уведомления ───
+        // ─── Notifications ───
         Item {
             id: notifHeader
-
             width: parent.width
             height: 26
 
@@ -847,7 +1150,7 @@ PanelBase {
                     leftMargin: 2
                     verticalCenter: parent.verticalCenter
                 }
-                text: "уведомления"
+                text: I18n.t("notifications")
                 font.family: Theme.fontFamily
                 font.pixelSize: 11
                 font.letterSpacing: 2.5
@@ -891,7 +1194,6 @@ PanelBase {
 
                 MouseArea {
                     id: notifClearMa
-
                     anchors.fill: parent
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
@@ -904,7 +1206,7 @@ PanelBase {
             width: parent.width
             height: visible ? 18 : 0
             visible: notifModel.count === 0
-            text: "пусто"
+            text: I18n.t("empty")
             font.family: Theme.fontFamily
             font.pixelSize: 12
             color: Theme.textDim
@@ -1009,7 +1311,7 @@ PanelBase {
                 id: nrow
 
                 width: notifListV.width
-                height: 62
+                height: 66
                 transform: Translate {
                     id: rowShift
 
@@ -1023,13 +1325,34 @@ PanelBase {
                     root.dismissNotif(model.nid)
                 }
 
+                function invokeMe() {
+                    // nid приходит из mako history (внешний ввод от любого
+                    // отправителя уведомлений) — только цифры, иначе отказ
+                    if (!/^\d+$/.test(String(model.nid)))
+                        return
+                    root.act("makoctl invoke -n " + model.nid + " 2>/dev/null || makoctl restore 2>/dev/null", false)
+                    nrow.dismissMe()
+                }
+
                 // карточка
                 Rectangle {
                     anchors.fill: parent
                     radius: Theme.radiusSmall
-                    color: Qt.rgba(1, 1, 1, 0.05)
+                    color: swipeMa.containsMouse ? Qt.rgba(1, 1, 1, 0.09) : Qt.rgba(1, 1, 1, 0.05)
                     border.width: 1
-                    border.color: Theme.stroke
+                    border.color: swipeMa.containsMouse ? Theme.alpha(Theme.accent, 0.4) : Theme.stroke
+
+                    Behavior on color {
+                        ColorAnimation {
+                            duration: 120
+                        }
+                    }
+
+                    Behavior on border.color {
+                        ColorAnimation {
+                            duration: 120
+                        }
+                    }
                 }
 
                 // полоска срочности слева
@@ -1109,7 +1432,7 @@ PanelBase {
                         font.pixelSize: 11
                         color: Theme.textDim
                         elide: Text.ElideRight
-                        maximumLineCount: 1
+                        maximumLineCount: 2
                         textFormat: Text.StyledText
                     }
                 }
@@ -1119,7 +1442,7 @@ PanelBase {
 
                     anchors {
                         right: parent.right
-                        rightMargin: 12
+                        rightMargin: closeBtn.visible ? 30 : 12
                         top: parent.top
                         topMargin: 10
                     }
@@ -1129,21 +1452,67 @@ PanelBase {
                     color: Theme.textDim
                 }
 
-                // свайп вбок чтобы убрать карточку (как на телефоне)
+                // Кнопка быстрого закрытия
+                Rectangle {
+                    id: closeBtn
+
+                    anchors {
+                        right: parent.right
+                        rightMargin: 8
+                        top: parent.top
+                        topMargin: 8
+                    }
+                    width: 18
+                    height: 18
+                    radius: 9
+                    visible: swipeMa.containsMouse || closeMa.containsMouse
+                    color: closeMa.containsMouse ? Theme.alpha(Theme.red, 0.3) : Qt.rgba(1, 1, 1, 0.12)
+                    z: 3
+
+                    Text {
+                        anchors.centerIn: parent
+                        text: "\uf00d"
+                        font.family: Theme.iconFont
+                        font.pixelSize: 10
+                        color: closeMa.containsMouse ? Theme.red : Theme.textDim
+                    }
+
+                    MouseArea {
+                        id: closeMa
+
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            if (!/^\d+$/.test(String(model.nid)))
+                                return
+                            root.act("makoctl dismiss -n " + model.nid + " 2>/dev/null", false)
+                            nrow.dismissMe()
+                        }
+                    }
+                }
+
+                // Клик (invoke) + свайп вбок чтобы убрать карточку
                 MouseArea {
                     id: swipeMa
 
                     property point startPt: Qt.point(0, 0)
                     property bool swiping: false
+                    property bool dragged: false
 
                     anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
                     onPressed: mouse => {
                         startPt = Qt.point(mouse.x, mouse.y)
                         swiping = false
+                        dragged = false
                     }
                     onPositionChanged: mouse => {
                         const dx = mouse.x - startPt.x
                         const dy = mouse.y - startPt.y
+                        if (Math.abs(dx) > 5 || Math.abs(dy) > 5)
+                            dragged = true
                         if (!swiping && Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy) * 1.4) {
                             swiping = true
                             swipeMa.preventStealing = true
@@ -1163,6 +1532,10 @@ PanelBase {
                     onCanceled: {
                         springBack.restart()
                         swiping = false
+                    }
+                    onClicked: {
+                        if (!dragged && !swiping)
+                            nrow.invokeMe()
                     }
                 }
 

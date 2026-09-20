@@ -5,36 +5,42 @@ Rectangle {
 
     property bool pressed: tap.pressed
     signal clicked()
+    signal editRequested()
 
     radius: Theme.radius
-    color: Theme.glass
+    color: tap.containsMouse ? Theme.glassHover : Theme.glass
+    border.width: Theme.isWP ? 0 : 1
+    border.color: tap.containsMouse ? (Theme.isMaterial ? Theme.alpha(Theme.primary, 0.45) : Theme.accent) : Theme.stroke
 
-    scale: pressed ? 0.94 : 1
+    scale: pressed ? 0.95 : (tap.containsMouse ? 1.015 : 1.0)
     Behavior on scale {
         NumberAnimation {
-            duration: 110
+            duration: 130
             easing.type: Easing.OutQuad
         }
     }
-
-    Rectangle {
-        anchors.fill: parent
-        radius: parent.radius
-        color: Theme.glassHover
-        opacity: tap.containsMouse ? 1 : 0
-        Behavior on opacity {
-            NumberAnimation {
-                duration: 130
-            }
+    Behavior on color {
+        ColorAnimation {
+            duration: 140
+        }
+    }
+    Behavior on border.color {
+        ColorAnimation {
+            duration: 140
         }
     }
 
+    // Material 3 Ripple / Press feedback
     Rectangle {
         anchors.fill: parent
         radius: parent.radius
-        color: "transparent"
-        border.width: 1
-        border.color: Theme.stroke
+        color: Theme.alpha(Theme.primary, 0.14)
+        opacity: (root.pressed && Theme.isMaterial) ? 1 : 0
+        Behavior on opacity {
+            NumberAnimation {
+                duration: 100
+            }
+        }
     }
 
     MouseArea {
@@ -43,5 +49,7 @@ Rectangle {
         hoverEnabled: true
         cursorShape: Qt.PointingHandCursor
         onClicked: root.clicked()
+        // Долгий клик по плитке = вход в режим редактирования сетки
+        onPressAndHold: root.editRequested()
     }
 }

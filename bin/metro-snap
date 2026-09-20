@@ -1,0 +1,61 @@
+#!/bin/bash
+# metro-snap — snapshots of metro shell (quickshell + bin scripts).
+# Two levels:
+#   1) btrfs snapshot of all /home via snapper (atomic, everything included)
+#   2) git commit of quickshell/ in ~/.config (readable diffs)
+#
+# Usage:
+#   metro-snap [message]   — take a snapshot (default: "manual snapshot")
+#   metro-snap list          — show snapshots
+#   metro-snap diff N        — what changed in quickshell since snapshot N
+#   metro-snap undo N        — roll quickshell+bin back to snapshot N (current
+#                              data is NOT fully lost: only shell files
+#                              are rolled back, the rest of /home is untouched)
+#   metro-snap tarball       — full tarball backup into ~/backups
+set -u
+
+SNAP_PREFIX="metro: "
+QS_DIR="$HOME/.config/quickshell"
+BIN_FILES="$HOME/.local/bin/qs-metro $HOME/.local/bin/metro-settings $HOME/.local/bin/metro-shot $HOME/.local/bin/metro-lock $HOME/.local/bin/metro-appearance $HOME/.local/bin/metro-colors $HOME/.local/bin/metro-theme"
+
+cmd="${1:-snap}"
+case "$cmd" in
+  list)
+    snapper -c home list
+    ;;
+  diff)
+    N="${2:?give snapshot number: metro-snap diff N}"
+    sudo -n snapper -c home status "$N..0" -- "$QS_DIR" $BIN_FILES 2>/dev/null \
+      || snapper -c home status "$N..0" -- "$QS_DIR"
+    ;;
+  undo)
+    N="${2:?give snapshot number: metro-snap undo N}"
+    echo "Rolling shell files back to snapshot $N ..."
+    snapper -c home undochange "$N..0" -- $BIN_FILES 2>/dev/null
+    # quickshell целиком через корень снапшота (undochange по файлам):
+    for f in $(snapper -c home status "$N..0" -- "$QS_DIR" 2>/dev/null | awk '{print $2}'); do
+      snapper -c home undochange "$N..0" -- "$f"
+    done
+    echo "Done. Restart the shell: qs-metro"
+    ;;
+  tarball)
+    mkdir -p "$HOME/backups"
+    TS=$(date +%Y%m%d-%H%M%S)
+    # shellcheck disable=SC2086
+    tar -czf "$HOME/backups/quickshell-$TS.tar.gz" -C "$HOME" \
+      .config/quickshell $BIN_FILES .local/state/metro/wall 2>&1
+    ls -la "$HOME/backups/" | tail -5
+    ;;
+  snap|*)
+    # metro-snap [описание...] — всё, что не команда, считается описанием
+    if [ "$cmd" = "snap" ]; then shift; DESC="${*:-manual snapshot}"; else DESC="$*"; fi
+    snapper -c home create --description "$SNAP_PREFIX$DESC" --cleanup-algorithm number \
+      && echo "snapper: ok"
+    git -C "$HOME/.config" add quickshell 2>/dev/null
+    if ! git -C "$HOME/.config" diff --cached --quiet -- quickshell 2>/dev/null; then
+      git -C "$HOME/.config" commit -q -m "metro: $DESC" -- quickshell && echo "git: committed"
+    else
+      echo "git: no changes"
+    fi
+    ;;
+esac

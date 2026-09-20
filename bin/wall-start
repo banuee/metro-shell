@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
-# wall-start — запуск awww-daemon при логине Hyprland + восстановление обоев
-# (вызывается из hyprland.lua: hl.exec_cmd("wall-start")). Идемпотентен.
+# wall-start — launch awww-daemon at Hyprland login + restore wallpaper
+# (called from hyprland.lua: hl.exec_cmd("wall-start")). Idempotent.
 set -u
 
 STATEDIR="${XDG_STATE_HOME:-$HOME/.local/state}/metro"
+LOGDIR="$STATEDIR/logs"
+mkdir -p "$LOGDIR"
 WALLDIR="$HOME/Wallpapers"
 
 if ! pgrep -x awww-daemon >/dev/null; then
-    (setsid awww-daemon >/tmp/awww-daemon.log 2>&1 </dev/null &)
+    (setsid awww-daemon >"$LOGDIR/awww-daemon.log" 2>&1 </dev/null &)
 fi
 
 up=""
@@ -16,13 +18,13 @@ for _ in $(seq 1 50); do
     sleep 0.1
 done
 if [[ -z "$up" ]]; then
-    echo "[wall-start] awww-daemon не поднялся, смотри /tmp/awww-daemon.log" >&2
+    echo "[wall-start] awww-daemon failed to start, see $LOGDIR/awww-daemon.log" >&2
     exit 1
 fi
 
 awww restore >/dev/null 2>&1 || true
 
-# если в кэше нет обоев — ставим путь из state, иначе первую картинку из ~/Wallpapers
+# if no wallpaper in cache — set path from state, otherwise first image from ~/Wallpapers
 cur="$(awww query 2>/dev/null)"
 if ! grep -Eqi 'displaying:[[:space:]]*/[^ ]+\.(jpe?g|png|webp|gif|bmp)' <<<"$cur"; then
     img="$(cat "$STATEDIR/wall" 2>/dev/null || true)"

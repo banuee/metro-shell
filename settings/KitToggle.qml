@@ -3,38 +3,52 @@ import QtQuick
 Rectangle {
     id: root
 
-    width: 46
-    height: 26
-    radius: 13
-    color: checked ? Theme.alpha(Theme.accent, 0.92) : Qt.rgba(1, 1, 1, 0.14)
-
-    Behavior on color {
-        ColorAnimation {
-            duration: 140
-        }
-    }
-
     property bool checked: false
     signal toggled(bool checked)
 
+    width: 52
+    height: 32
+    radius: 16
+    color: checked ? Theme.accent : Theme.glass
+    border.width: 1
+    border.color: checked ? Theme.accent : (ma.containsMouse ? Theme.accent : Theme.stroke)
+    scale: ma.pressed ? 0.94 : (ma.containsMouse ? 1.04 : 1.0)
+
+    Behavior on color { ColorAnimation { duration: 160 } }
+    Behavior on border.color { ColorAnimation { duration: 160 } }
+    Behavior on scale { NumberAnimation { duration: 110; easing.type: Easing.OutQuad } }
+
     Rectangle {
-        x: root.checked ? root.width - width - 4 : 4
+        x: root.checked ? (root.width - width - 4) : 4
         anchors.verticalCenter: parent.verticalCenter
-        width: 18
-        height: 18
-        radius: 9
-        color: "#ffffff"
+        width: root.checked ? (ma.pressed ? 28 : 24) : (ma.pressed ? 20 : 16)
+        height: root.checked ? 24 : 16
+        radius: height / 2
+        color: root.checked ? "#ffffff" : (ma.containsMouse ? Theme.accent : Theme.textDim)
 
         Behavior on x {
             NumberAnimation {
-                duration: 160
+                duration: 180
                 easing.type: Easing.OutCubic
             }
+        }
+
+        Behavior on width {
+            NumberAnimation {
+                duration: 140
+                easing.type: Easing.OutQuad
+            }
+        }
+
+        Behavior on color {
+            ColorAnimation { duration: 140 }
         }
     }
 
     MouseArea {
+        id: ma
         anchors.fill: parent
+        hoverEnabled: true
         cursorShape: Qt.PointingHandCursor
         onClicked: root.toggled(!root.checked)
     }

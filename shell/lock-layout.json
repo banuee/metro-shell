@@ -1,0 +1,1 @@
+[{"type":"auth","w":3,"h":2,"x":6,"y":0},{"type":"clock","w":3,"h":2,"x":3,"y":0},{"type":"weather","w":1,"h":1,"x":5,"y":3},{"type":"battery","w":1,"h":1,"x":6,"y":4},{"type":"media","w":3,"h":1,"x":3,"y":2},{"type":"sysinfo","w":3,"h":1,"x":6,"y":2}]

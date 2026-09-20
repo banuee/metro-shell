@@ -19,12 +19,13 @@ Column {
         height: 44
         radius: 8
         color: headMa.containsMouse ? Theme.glassHover : Theme.glass
+        border.width: 1
+        border.color: root.open ? Theme.alpha(Theme.accent, 0.5) : (headMa.containsMouse ? Qt.rgba(1, 1, 1, 0.18) : Theme.stroke)
+        scale: headMa.pressed ? 0.98 : (headMa.containsMouse ? 1.005 : 1.0)
 
-        Behavior on color {
-            ColorAnimation {
-                duration: 120
-            }
-        }
+        Behavior on color { ColorAnimation { duration: 120 } }
+        Behavior on border.color { ColorAnimation { duration: 140 } }
+        Behavior on scale { NumberAnimation { duration: 110; easing.type: Easing.OutQuad } }
 
         Text {
             anchors.left: parent.left
@@ -47,14 +48,27 @@ Column {
                 text: root.value
                 font.family: Theme.fontFamily
                 font.pixelSize: 13
-                color: Theme.textDim
+                font.weight: Font.DemiBold
+                color: root.open ? Theme.accent : Theme.textDim
+
+                Behavior on color { ColorAnimation { duration: 120 } }
             }
+
             Text {
                 anchors.verticalCenter: parent.verticalCenter
-                text: root.open ? "\uf077" : "\uf078"
+                text: "\uf078"
                 font.family: Theme.iconFont
-                font.pixelSize: 10
-                color: Theme.textDim
+                font.pixelSize: 11
+                color: root.open ? Theme.accent : Theme.textDim
+                rotation: root.open ? 180 : 0
+
+                Behavior on rotation {
+                    NumberAnimation {
+                        duration: 200
+                        easing.type: Easing.OutCubic
+                    }
+                }
+                Behavior on color { ColorAnimation { duration: 120 } }
             }
         }
 
@@ -68,49 +82,93 @@ Column {
         }
     }
 
-    // выпадающий список (аккордеон — не ловит клиппинг фликабеля)
-    Column {
-        visible: root.open
+    // выпадающий список (плавный аккордеон)
+    Item {
+        id: dropdownBox
         width: root.width
-        spacing: 2
+        height: root.open ? dropCol.height : 0
+        opacity: root.open ? 1 : 0
+        clip: true
+        visible: height > 0
 
-        Repeater {
-            model: root.options
+        Behavior on height {
+            NumberAnimation {
+                duration: 220
+                easing.type: Easing.OutCubic
+            }
+        }
 
-            Rectangle {
-                width: root.width
-                height: 36
-                radius: 6
-                color: optMa.containsMouse ? Theme.glassHover : "transparent"
+        Behavior on opacity {
+            NumberAnimation {
+                duration: 180
+            }
+        }
 
-                Behavior on color {
-                    ColorAnimation {
-                        duration: 100
+        Column {
+            id: dropCol
+            width: root.width
+            spacing: 2
+
+            Repeater {
+                model: root.options
+
+                Rectangle {
+                    id: optRow
+                    required property var modelData
+                    readonly property bool isSelected: modelData === root.value
+
+                    width: root.width
+                    height: 36
+                    radius: 6
+                    color: optMa.containsMouse ? Theme.glassHover : (isSelected ? Qt.rgba(1, 1, 1, 0.04) : "transparent")
+                    scale: optMa.pressed ? 0.98 : 1.0
+
+                    Behavior on color { ColorAnimation { duration: 100 } }
+                    Behavior on scale { NumberAnimation { duration: 100; easing.type: Easing.OutQuad } }
+
+                    Rectangle {
+                        anchors.left: parent.left
+                        anchors.leftMargin: 12
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 4
+                        height: 14
+                        radius: 2
+                        color: Theme.accent
+                        opacity: optRow.isSelected ? 1 : 0
+                        scale: optRow.isSelected ? 1.0 : 0.0
+
+                        Behavior on opacity { NumberAnimation { duration: 120 } }
+                        Behavior on scale { NumberAnimation { duration: 140; easing.type: Easing.OutBack } }
                     }
-                }
 
-                Text {
-                    anchors.left: parent.left
-                    anchors.leftMargin: 26
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: modelData
-                    font.family: Theme.fontFamily
-                    font.pixelSize: 13
-                    color: modelData === root.value ? Theme.accent : Theme.text
-                }
+                    Text {
+                        anchors.left: parent.left
+                        anchors.leftMargin: optMa.containsMouse ? 30 : 26
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: optRow.modelData
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 13
+                        font.weight: optRow.isSelected ? Font.DemiBold : Font.Normal
+                        color: optRow.isSelected ? Theme.accent : Theme.text
 
-                MouseArea {
-                    id: optMa
+                        Behavior on anchors.leftMargin { NumberAnimation { duration: 120; easing.type: Easing.OutCubic } }
+                        Behavior on color { ColorAnimation { duration: 100 } }
+                    }
 
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: {
-                        root.open = false
-                        root.picked(modelData)
+                    MouseArea {
+                        id: optMa
+
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            root.open = false
+                            root.picked(optRow.modelData)
+                        }
                     }
                 }
             }
         }
     }
 }
+

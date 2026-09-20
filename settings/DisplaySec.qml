@@ -8,32 +8,35 @@ Flickable {
     contentHeight: col.height + 8
     boundsBehavior: Flickable.StopAtBounds
 
-
     property var win
     property var monitors: []
-    property var modes: ({}) // name → availableModes[]
+    property var modes: ({})
 
     function refresh() {
-        pJson.command = ["sh", "-c", "hyprctl -j monitors"]
-        pJson.running = true
-        pModes.command = ["sh", "-c", "hyprctl monitors"]
-        pModes.running = true
+        pMons.command = ["sh", "-c", "hyprctl -j monitors 2>/dev/null"]
+        pMons.running = true
     }
 
     Timer {
         id: delay
-
-        interval: 1000
+        interval: 500
         onTriggered: refresh()
     }
 
     Process {
-        id: pJson
-
+        id: pMons
         stdout: StdioCollector {
             onStreamFinished: {
                 try {
-                    root.monitors = JSON.parse(text)
+                    const list = JSON.parse(text)
+                    root.monitors = list
+                    for (const m of list) {
+                        if (m.availableModes) {
+                            const modesCopy = Object.assign({}, root.modes)
+                            modesCopy[m.name] = m.availableModes
+                            root.modes = modesCopy
+                        }
+                    }
                 } catch (e) {
                     root.monitors = []
                 }
@@ -41,38 +44,13 @@ Flickable {
         }
     }
 
-    Process {
-        id: pModes
-
-        stdout: StdioCollector {
-            onStreamFinished: {
-                const m = {}
-                let cur = null
-                for (const line of text.split("\n")) {
-                    const nm = line.match(/^Monitor (\S+) \(ID \d+\):/)
-                    if (nm) {
-                        cur = nm[1]
-                        m[cur] = []
-                        continue
-                    }
-                    const av = line.match(/availableModes:\s*(.+)/)
-                    if (av && cur) {
-                        m[cur] = av[1].trim().split(/\s+/)
-                    }
-                }
-                root.modes = m
-            }
-        }
-    }
-
     Column {
         id: col
-
         width: root.width
         spacing: 10
 
         Text {
-            text: "МОНИТОРЫ"
+            text: I18n.t("monitors")
             font.family: Theme.fontFamily
             font.pixelSize: 11
             font.letterSpacing: 2
@@ -84,17 +62,17 @@ Flickable {
 
             Rectangle {
                 id: monCard
-
                 width: parent.width
                 height: monCol.implicitHeight + 28
                 radius: 10
                 color: Theme.glass
+                border.width: 1
+                border.color: monCard.modelData.focused ? Theme.alpha(Theme.accent, 0.4) : Theme.stroke
 
                 required property var modelData
 
                 Column {
                     id: monCol
-
                     anchors {
                         left: parent.left
                         right: parent.right
@@ -117,7 +95,7 @@ Flickable {
                                 font.family: Theme.fontFamily
                                 font.pixelSize: 15
                                 font.weight: Font.DemiBold
-                                color: Theme.text
+                                color: monCard.modelData.focused ? Theme.accent : Theme.text
                             }
                             Text {
                                 text: monCard.modelData.description
@@ -139,8 +117,7 @@ Flickable {
 
                     KitCombo {
                         id: modeCombo
-
-                        label: "разрешение и частота"
+                        label: I18n.t("res_rate")
                         value: monCard.modelData.width + "x" + monCard.modelData.height + "@" + monCard.modelData.refreshRate
                         options: ["preferred"].concat(root.modes[monCard.modelData.name] || [])
                         property string chosen: "current"
@@ -154,7 +131,7 @@ Flickable {
                         Text {
                             anchors.left: parent.left
                             anchors.verticalCenter: parent.verticalCenter
-                            text: "масштаб"
+                            text: I18n.t("scale")
                             font.family: Theme.fontFamily
                             font.pixelSize: 14
                             color: Theme.text
@@ -163,24 +140,28 @@ Flickable {
                         Row {
                             anchors.right: parent.right
                             anchors.verticalCenter: parent.verticalCenter
-                            spacing: 10
+                            spacing: 6
 
                             Rectangle {
-                                width: 30
-                                height: 30
-                                radius: 6
+                                width: 32
+                                height: 32
+                                radius: 8
                                 color: minusMa.containsMouse ? Theme.glassHover : Theme.glass
+                                scale: minusMa.pressed ? 0.88 : (minusMa.containsMouse ? 1.08 : 1.0)
+
+                                Behavior on color { ColorAnimation { duration: 120 } }
+                                Behavior on scale { NumberAnimation { duration: 110; easing.type: Easing.OutBack } }
 
                                 Text {
                                     anchors.centerIn: parent
                                     text: "−"
+                                    font.family: Theme.fontFamily
                                     font.pixelSize: 16
                                     color: Theme.text
                                 }
 
                                 MouseArea {
                                     id: minusMa
-
                                     anchors.fill: parent
                                     hoverEnabled: true
                                     cursorShape: Qt.PointingHandCursor
@@ -188,44 +169,49 @@ Flickable {
                                 }
                             }
 
-                            Text {
-                                anchors.verticalCenter: parent.verticalCenter
-                                width: 46
-                                horizontalAlignment: Text.AlignHCenter
-                                text: monCard.scaleVal.toFixed(2)
-                                font.family: Theme.fontFamily
-                                font.pixelSize: 14
-                                color: Theme.text
+                            Rectangle {
+                                width: 56
+                                height: 32
+                                radius: 8
+                                color: "transparent"
+
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: monCard.scaleVal.toFixed(2) + "x"
+                                    font.family: Theme.fontFamily
+                                    font.pixelSize: 13
+                                    font.weight: Font.DemiBold
+                                    color: Theme.accent
+                                }
                             }
 
                             Rectangle {
-                                width: 30
-                                height: 30
-                                radius: 6
+                                width: 32
+                                height: 32
+                                radius: 8
                                 color: plusMa.containsMouse ? Theme.glassHover : Theme.glass
+                                scale: plusMa.pressed ? 0.88 : (plusMa.containsMouse ? 1.08 : 1.0)
+
+                                Behavior on color { ColorAnimation { duration: 120 } }
+                                Behavior on scale { NumberAnimation { duration: 110; easing.type: Easing.OutBack } }
 
                                 Text {
                                     anchors.centerIn: parent
                                     text: "+"
+                                    font.family: Theme.fontFamily
                                     font.pixelSize: 16
                                     color: Theme.text
                                 }
 
                                 MouseArea {
                                     id: plusMa
-
                                     anchors.fill: parent
                                     hoverEnabled: true
                                     cursorShape: Qt.PointingHandCursor
-                                    onClicked: monCard.scaleVal = Math.min(4, Math.round((monCard.scaleVal + 0.25) * 100) / 100)
+                                    onClicked: monCard.scaleVal = Math.min(3.0, Math.round((monCard.scaleVal + 0.25) * 100) / 100)
                                 }
                             }
                         }
-                    }
-
-                    Item {
-                        width: parent.width
-                        height: 4
                     }
 
                     Row {
@@ -236,18 +222,24 @@ Flickable {
                             width: 118
                             height: 32
                             radius: 8
-                            color: Theme.glass
+                            color: vrrMa.containsMouse ? Theme.glassHover : Theme.glass
+                            scale: vrrMa.pressed ? 0.94 : (vrrMa.containsMouse ? 1.03 : 1.0)
+
+                            Behavior on color { ColorAnimation { duration: 120 } }
+                            Behavior on scale { NumberAnimation { duration: 110; easing.type: Easing.OutQuad } }
 
                             Text {
                                 anchors.centerIn: parent
-                                text: "vrr " + (monCard.vrrVal ? "вкл" : "выкл")
+                                text: "vrr " + (monCard.vrrVal ? I18n.t("on") : I18n.t("off"))
                                 font.family: Theme.fontFamily
                                 font.pixelSize: 12
                                 color: monCard.vrrVal ? Theme.accent : Theme.textDim
                             }
 
                             MouseArea {
+                                id: vrrMa
                                 anchors.fill: parent
+                                hoverEnabled: true
                                 cursorShape: Qt.PointingHandCursor
                                 onClicked: monCard.vrrVal = !monCard.vrrVal
                             }
@@ -258,16 +250,14 @@ Flickable {
                             height: 32
                             radius: 8
                             color: Theme.alpha(Theme.accent, applyMa.pressed ? 0.95 : 0.75)
+                            scale: applyMa.pressed ? 0.94 : (applyMa.containsMouse ? 1.03 : 1.0)
 
-                            Behavior on color {
-                                ColorAnimation {
-                                    duration: 120
-                                }
-                            }
+                            Behavior on color { ColorAnimation { duration: 120 } }
+                            Behavior on scale { NumberAnimation { duration: 110; easing.type: Easing.OutQuad } }
 
                             Text {
                                 anchors.centerIn: parent
-                                text: "применить"
+                                text: I18n.t("apply")
                                 font.family: Theme.fontFamily
                                 font.pixelSize: 13
                                 font.weight: Font.DemiBold
@@ -276,15 +266,14 @@ Flickable {
 
                             MouseArea {
                                 id: applyMa
-
                                 anchors.fill: parent
+                                hoverEnabled: true
                                 cursorShape: Qt.PointingHandCursor
                                 onClicked: {
                                     const md = monCard.modelData
                                     let mode = md.width + "x" + md.height + "@" + md.refreshRate
                                     if (modeCombo.chosen !== "current")
                                         mode = modeCombo.chosen
-                                    // hyprctl keyword в 0.56 (Lua-парсер) не работает для мониторов — только eval
                                     root.win.run("hyprctl eval 'hl.monitor({output=\"" + md.name + "\", mode=\"" + mode + "\", position=\"" + md.x + "x" + md.y + "\", scale=" + monCard.scaleVal + ", vrr=" + (monCard.vrrVal ? "true" : "false") + "})'")
                                     root.delay.restart()
                                 }
@@ -298,14 +287,13 @@ Flickable {
                     }
                 }
 
-                // локальные состояния карточки
                 property real scaleVal: modelData.scale
                 property bool vrrVal: modelData.vrr
             }
         }
 
         Text {
-            text: "изменения применяются на лету, но живут до перезагрузки — зафиксируй выбранный режим в hyprland.lua"
+            text: I18n.t("display_hint")
             width: parent.width
             wrapMode: Text.WordWrap
             font.family: Theme.fontFamily

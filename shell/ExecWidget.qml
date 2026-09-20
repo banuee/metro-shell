@@ -9,11 +9,11 @@ TileFrame {
     property string label: ""
     property string iconGlyph: "\uf120"
     property bool inTerminal: true
-    property bool panelShown: true
 
-    readonly property string displayLabel: label !== "" ? label : (command !== "" ? command.trim().split(/\s+/)[0] : "команда")
+    readonly property string displayLabel: label !== "" ? label : (command !== "" ? command.trim().split(/\s+/)[0] : I18n.t("command"))
     readonly property bool isWide: width > Theme.unit + 20
     readonly property bool isTall: height > Theme.unit + 20
+    readonly property bool isXL: width > Theme.tileW(2) + 20
     readonly property bool isRunning: pExec.running
 
     // Вспышка / подсветка при клике
@@ -192,7 +192,7 @@ TileFrame {
 
                             Text {
                                 anchors.verticalCenter: parent.verticalCenter
-                                text: root.inTerminal ? "kitty" : "фон"
+                                text: root.inTerminal ? "term" : "фон"
                                 font.family: Theme.fontFamily
                                 font.pixelSize: 9
                                 color: Theme.textDim
@@ -223,11 +223,107 @@ TileFrame {
         }
     }
 
+    // ── 1x2 Вертикальный вид ──
+    Item {
+        anchors.fill: parent
+        anchors.margins: 10
+        visible: !root.isWide && root.isTall
+        z: 1
+
+        Column {
+            anchors.top: parent.top
+            width: parent.width
+            spacing: 6
+
+            Rectangle {
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: 44
+                height: 44
+                radius: Theme.radiusSmall
+                color: Theme.glass
+                border.width: 1
+                border.color: Theme.stroke
+
+                Text {
+                    anchors.centerIn: parent
+                    text: root.iconGlyph !== "" ? root.iconGlyph : "\uf120"
+                    font.family: Theme.iconFont
+                    font.pixelSize: 22
+                    color: Theme.accent
+                }
+            }
+
+            Text {
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: parent.width
+                text: root.displayLabel
+                font.family: Theme.fontFamily
+                font.pixelSize: 12
+                font.weight: Font.DemiBold
+                color: Theme.text
+                elide: Text.ElideRight
+                horizontalAlignment: Text.AlignHCenter
+            }
+
+            Text {
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: parent.width
+                text: "$ " + root.command
+                font.family: "monospace"
+                font.pixelSize: 9
+                color: Theme.textDim
+                elide: Text.ElideRight
+                horizontalAlignment: Text.AlignHCenter
+            }
+
+            Rectangle {
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: vertModeRow.width + 12
+                height: 16
+                radius: 8
+                color: Theme.glass
+                border.width: 1
+                border.color: Theme.stroke
+
+                Row {
+                    id: vertModeRow
+                    anchors.centerIn: parent
+                    spacing: 4
+
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: root.inTerminal ? "\uf120" : "\uf0e7"
+                        font.family: Theme.iconFont
+                        font.pixelSize: 8
+                        color: root.inTerminal ? Theme.textDim : Theme.accent
+                    }
+
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: root.inTerminal ? "kitty" : "фон"
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 9
+                        color: Theme.textDim
+                    }
+                }
+            }
+
+            Text {
+                anchors.horizontalCenter: parent.horizontalCenter
+                visible: root.isRunning
+                text: "пуск..."
+                font.family: Theme.fontFamily
+                font.pixelSize: 9
+                color: Theme.accent
+            }
+        }
+    }
+
     // ── 2x2 Большой вид ──
     Item {
         anchors.fill: parent
         anchors.margins: 14
-        visible: root.isWide && root.isTall
+        visible: root.isWide && root.isTall && !root.isXL
         z: 1
 
         Column {
@@ -361,8 +457,141 @@ TileFrame {
         }
     }
 
+    // ── 3x2 Широкий hero-вид ──
+    Item {
+        anchors.fill: parent
+        anchors.margins: 14
+        visible: root.isXL && root.isTall
+        z: 1
+
+        Row {
+            anchors.fill: parent
+            spacing: 14
+
+            Rectangle {
+                anchors.verticalCenter: parent.verticalCenter
+                width: 56
+                height: 56
+                radius: Theme.radiusSmall
+                color: Theme.glass
+                border.width: 1
+                border.color: Theme.stroke
+
+                Text {
+                    anchors.centerIn: parent
+                    text: root.iconGlyph !== "" ? root.iconGlyph : "\uf120"
+                    font.family: Theme.iconFont
+                    font.pixelSize: 28
+                    color: Theme.accent
+                }
+            }
+
+            Column {
+                anchors.verticalCenter: parent.verticalCenter
+                width: parent.width - 70
+                spacing: 6
+
+                Text {
+                    width: parent.width
+                    text: root.displayLabel
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 16
+                    font.weight: Font.DemiBold
+                    color: Theme.text
+                    elide: Text.ElideRight
+                }
+
+                Rectangle {
+                    width: parent.width
+                    height: 34
+                    radius: Theme.radiusSmall
+                    color: Theme.glass
+                    border.width: 1
+                    border.color: Theme.stroke
+
+                    Text {
+                        anchors {
+                            left: parent.left
+                            right: parent.right
+                            verticalCenter: parent.verticalCenter
+                            leftMargin: 10
+                            rightMargin: 10
+                        }
+                        text: "$ " + root.command
+                        font.family: "monospace"
+                        font.pixelSize: 11
+                        color: Theme.textDim
+                        elide: Text.ElideRight
+                    }
+                }
+
+                Row {
+                    spacing: 6
+
+                    Rectangle {
+                        width: xlModeRow.width + 12
+                        height: 18
+                        radius: 9
+                        color: Theme.glass
+                        border.width: 1
+                        border.color: Theme.stroke
+
+                        Row {
+                            id: xlModeRow
+                            anchors.centerIn: parent
+                            spacing: 5
+
+                            Text {
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: root.inTerminal ? "\uf120" : "\uf0e7"
+                                font.family: Theme.iconFont
+                                font.pixelSize: 9
+                                color: root.inTerminal ? Theme.text : Theme.accent
+                            }
+
+                            Text {
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: root.inTerminal ? "в терминале" : "в фоне"
+                                font.family: Theme.fontFamily
+                                font.pixelSize: 10
+                                color: Theme.textDim
+                            }
+                        }
+                    }
+
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: root.isRunning ? "Выполняется..." : "Нажмите для запуска"
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 11
+                        color: root.isRunning ? Theme.accent : Theme.textDim
+                    }
+                }
+            }
+        }
+    }
+
     Process {
         id: pExec
+    }
+
+    // Запуск в терминале с фолбэком: kitty (ставится везде) →
+    // alacritty → foot → gnome-terminal → xterm.
+    // Команда едет через tempfile + quoted-heredoc, поэтому кавычки,
+    // $ и бэкслэши внутри неё безопасны (сломается только на строке
+    // METRO_EXEC_EOF — такой команды не бывает).
+    function termScript(cmd, hold) {
+        return "F=$(mktemp /tmp/metro-exec.XXXXXX.sh); cat > \"$F\" <<'METRO_EXEC_EOF'\n"
+            + cmd + "\nMETRO_EXEC_EOF\n"
+            + "export F;"
+            + " if command -v kitty >/dev/null 2>&1; then"
+            + (hold ? " kitty --hold -e sh -c 'sh \"$F\"; rm -f \"$F\"';"
+                    : " kitty -e sh -c 'sh \"$F\"; echo; read -p \"done\" _; rm -f \"$F\"';")
+            + " elif command -v alacritty >/dev/null 2>&1; then alacritty -e sh -c 'sh \"$F\"; echo; read -p \"done\" _; rm -f \"$F\"';"
+            + " elif command -v foot >/dev/null 2>&1; then foot sh -c 'sh \"$F\"; echo; read -p \"done\" _; rm -f \"$F\"';"
+            + " elif command -v gnome-terminal >/dev/null 2>&1; then gnome-terminal -- sh -c 'sh \"$F\"; echo; read -p \"done\" _; rm -f \"$F\"';"
+            + " elif command -v xterm >/dev/null 2>&1; then xterm -e sh -c 'sh \"$F\"; echo; read -p \"done\" _; rm -f \"$F\"';"
+            + " else sh \"$F\"; rm -f \"$F\"; fi"
     }
 
     onClicked: {
@@ -371,7 +600,7 @@ TileFrame {
             pExec.running = false
 
         if (root.inTerminal) {
-            pExec.command = ["kitty", "--hold", "-e", "sh", "-c", root.command]
+            pExec.command = ["sh", "-c", termScript(root.command, true)]
         } else {
             pExec.command = ["sh", "-c", root.command]
         }

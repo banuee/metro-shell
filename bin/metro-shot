@@ -1,0 +1,216 @@
+#!/bin/bash
+# metro-shot — native screenshot utility in Windows Phone Metro + Acrylic Glass on Quickshell
+#
+# Usage:
+#   metro-shot                    — open interactive Metro toolbar
+#   metro-shot area | region      — take screenshot of selected region
+#   metro-shot window             — take screenshot of active window
+#   metro-shot output | full      — take screenshot of full screen
+#   metro-shot ocr                — extract text from screen area to clipboard
+#   metro-shot edit               — take screenshot and open in Satty
+#   metro-shot --preview <file>   — show Metro preview card
+#   metro-shot -c | --copy        — copy directly to clipboard
+#   metro-shot -z | --freeze      — freeze screen (hyprpicker)
+#   metro-shot --cursor           — include cursor in screenshot
+
+CONFIG_DIR="$HOME/.config/quickshell/metro-shot"
+
+do_capture() {
+  local mode="${1:-area}"
+  local freeze="${2:-0}"
+  local cursor="${3:-0}"
+  local ocr="${4:-0}"
+  local edit="${5:-0}"
+  local copy="${6:-0}"
+  local delay="${7:-0}"
+
+  if [ "$delay" -gt 0 ] 2>/dev/null; then
+    sleep "$delay"
+  fi
+
+  local home="${HOME:?metro-shot: HOME is not set}"
+  local timestamp
+  timestamp="$(date +%Y%m%d_%H%M%S)"
+
+  local final_dir
+  if [ "$copy" = "1" ]; then
+    final_dir="$home/.cache/metro-shot"
+  else
+    final_dir="$home/Pictures/Screenshots"
+  fi
+  mkdir -p "$final_dir"
+  local final_path="$final_dir/Screenshot_${timestamp}.png"
+
+  local accent
+  accent="$("$HOME/.local/bin/metro-colors" --status-hex 2>/dev/null || echo "#3a73ab")"
+  local slurp_bg="#09090f66"
+  local slurp_border="${accent}"
+  local slurp_sel="${accent}33"
+  local slurp_box="${accent}4d"
+
+  local hpid=""
+  if [ "$freeze" = "1" ] && command -v hyprpicker >/dev/null 2>&1; then
+    hyprpicker -r -z &
+    hpid=$!
+    sleep 0.15
+  fi
+
+  local cursor_flag=""
+  if [ "$cursor" = "1" ]; then
+    cursor_flag="-c"
+  fi
+
+  # Brief pause for toolbar unmapping
+  sleep 0.12
+
+  if [ "$mode" = "area" ]; then
+    local geom
+    geom=$(slurp -b "$slurp_bg" -c "$slurp_border" -s "$slurp_sel" -B "$slurp_box" -w 2 2>/dev/null)
+    if [ -z "$geom" ]; then
+      [ -n "$hpid" ] && kill "$hpid" 2>/dev/null
+      exit 0
+    fi
+    [ -n "$hpid" ] && kill "$hpid" 2>/dev/null
+    sleep 0.12
+    grim $cursor_flag -g "$geom" "$final_path" || exit 1
+  elif [ "$mode" = "window" ]; then
+    local mons act_ws boxes geom
+    mons=$(hyprctl -j monitors 2>/dev/null)
+    act_ws=$(echo "$mons" | jq -r 'map(.activeWorkspace.id) | join(",")' 2>/dev/null)
+    boxes=$(hyprctl -j clients 2>/dev/null | jq -r --arg ws "$act_ws" '[.[] | select((.workspace.id | tostring | inside($ws)) and .mapped == true and .hidden == false and .size[0] > 0 and .size[1] > 0)] | (if length == 0 then . else . end)[] | "\(.at[0]),\(.at[1]) \(.size[0])x\(.size[1])"' 2>/dev/null)
+    if [ -n "$boxes" ]; then
+      geom=$(echo "$boxes" | slurp -b "$slurp_bg" -c "$slurp_border" -s "$slurp_sel" -B "$slurp_box" -r -w 2 2>/dev/null)
+    else
+      geom=$(slurp -b "$slurp_bg" -c "$slurp_border" -s "$slurp_sel" -B "$slurp_box" -w 2 2>/dev/null)
+    fi
+    if [ -z "$geom" ]; then
+      [ -n "$hpid" ] && kill "$hpid" 2>/dev/null
+      exit 0
+    fi
+    [ -n "$hpid" ] && kill "$hpid" 2>/dev/null
+    sleep 0.12
+    grim $cursor_flag -g "$geom" "$final_path" || exit 1
+  else
+    # full output
+    [ -n "$hpid" ] && kill "$hpid" 2>/dev/null
+    sleep 0.12
+    grim $cursor_flag "$final_path" || exit 1
+  fi
+
+  # Copy to clipboard
+  wl-copy < "$final_path" 2>/dev/null
+
+  # OCR
+  if [ "$ocr" = "1" ]; then
+    tesseract "$final_path" stdout 2>/dev/null | wl-copy 2>/dev/null
+  fi
+
+  # Open in Satty editor
+  if [ "$edit" = "1" ]; then
+    satty -f "$final_path" --early-exit save >/dev/null 2>&1 &
+    exit 0
+  fi
+
+  # Preview card
+  if [ -f "$final_path" ]; then
+    METRO_SHOT_PREVIEW="$final_path" METRO_SHOT_COPY="$copy" METRO_SHOT_OCR="$ocr" QT_QPA_PLATFORMTHEME=gtk3 setsid quickshell -p "$CONFIG_DIR" >/dev/null 2>&1 </dev/null &
+  fi
+}
+
+if [ "$1" = "--do-capture" ]; then
+  shift
+  do_capture "$@"
+  exit 0
+fi
+
+pkill -f "quickshell -p $CONFIG_DIR" 2>/dev/null
+
+MODE=""
+FREEZE=0
+OCR=0
+EDIT=0
+COPY=0
+CURSOR=0
+DELAY=0
+PREVIEW=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    area|region|-m\ area|-m\ region)
+      MODE="area"
+      shift
+      ;;
+    window|-m\ window)
+      MODE="window"
+      shift
+      ;;
+    output|screen|full|-m\ output|-m\ screen)
+      MODE="output"
+      shift
+      ;;
+    -z|--freeze)
+      FREEZE=1
+      shift
+      ;;
+    --cursor)
+      CURSOR=1
+      shift
+      ;;
+    ocr|--ocr)
+      OCR=1
+      [ -z "$MODE" ] && MODE="area"
+      shift
+      ;;
+    edit|-e|--edit)
+      EDIT=1
+      [ -z "$MODE" ] && MODE="area"
+      shift
+      ;;
+    -c|--copy)
+      COPY=1
+      shift
+      ;;
+    -t|--timer|--delay)
+      DELAY="$2"
+      shift 2
+      ;;
+    --preview)
+      PREVIEW="$2"
+      shift 2
+      ;;
+    -h|--help)
+      echo "Metro Shot — screenshot tool in Windows Phone Metro Live Tiles style"
+      echo "Usage: metro-shot [mode] [options]"
+      echo ""
+      echo "Modes:"
+      echo "  area, region        Region selection screenshot (slurp)"
+      echo "  window              Active window screenshot"
+      echo "  output, full        Full screen screenshot"
+      echo "  -z, --freeze        Freeze screen before capture (hyprpicker)"
+      echo "  --cursor            Include cursor in screenshot"
+      echo "  ocr                 Recognize text on screen (tesseract) to clipboard"
+      echo "  edit                Capture and open in Satty image editor"
+      echo "  -c, --copy          Copy to clipboard without saving to ~/Pictures"
+      echo "  --preview <path>    Show Metro preview card for existing screenshot"
+      exit 0
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+
+if [ -n "$PREVIEW" ]; then
+  METRO_SHOT_PREVIEW="$PREVIEW" METRO_SHOT_COPY="$COPY" METRO_SHOT_OCR="$OCR" QT_QPA_PLATFORMTHEME=gtk3 setsid quickshell -p "$CONFIG_DIR" >/dev/null 2>&1 &
+  exit 0
+fi
+
+if [ -n "$MODE" ] || [ "$COPY" = "1" ] || [ "$OCR" = "1" ] || [ "$EDIT" = "1" ]; then
+  [ -z "$MODE" ] && MODE="area"
+  do_capture "$MODE" "$FREEZE" "$CURSOR" "$OCR" "$EDIT" "$COPY" "$DELAY"
+  exit 0
+fi
+
+LOGDIR="${XDG_STATE_HOME:-$HOME/.local/state}/metro/logs"
+mkdir -p "$LOGDIR"
+QT_QPA_PLATFORMTHEME=gtk3 setsid quickshell -p "$CONFIG_DIR" >"$LOGDIR/qs-metro-shot.log" 2>&1 </dev/null &

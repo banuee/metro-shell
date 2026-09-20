@@ -1,6 +1,15 @@
 #!/bin/bash
-# Перезапуск metro-шелла quickshell (убить + запустить заново)
-pkill -x quickshell 2>/dev/null
-sleep 0.3
-QT_QPA_PLATFORMTHEME=gtk3 setsid quickshell -p "$HOME/.config/quickshell/metro" >/tmp/qs-metro.log 2>&1 </dev/null &
-echo "quickshell перезапущен, лог: /tmp/qs-metro.log"
+# Restart quickshell metro shell (kill + relaunch main shell only)
+# Logs: per-user dir (never /tmp — it breaks multi-user systems).
+LOGDIR="${XDG_STATE_HOME:-$HOME/.local/state}/metro/logs"
+mkdir -p "$LOGDIR"
+pkill -f "quickshell -p .*metro$" 2>/dev/null || true
+for i in {1..30}; do
+    if ! pgrep -f "quickshell -p .*metro$" >/dev/null; then
+        break
+    fi
+    sleep 0.1
+done
+QT_QPA_PLATFORMTHEME=gtk3 nohup quickshell -p "$HOME/.config/quickshell/metro" >"$LOGDIR/qs-metro.log" 2>&1 </dev/null &
+disown
+echo "quickshell restarted, log: $LOGDIR/qs-metro.log"

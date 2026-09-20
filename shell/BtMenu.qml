@@ -20,20 +20,20 @@ Item {
 
     function connect(mac) {
         connectingMac = mac
-        status = "Подключение..."
+        status = I18n.t("connecting")
         pAction.command = ["bluetoothctl", "connect", mac]
         pAction.running = true
     }
 
     function disconnectDev(mac) {
         connectingMac = mac
-        status = "Отключение..."
+        status = I18n.t("disconnecting")
         pAction.command = ["bluetoothctl", "disconnect", mac]
         pAction.running = true
     }
 
     function setPower(on) {
-        status = on ? "Включение..." : "Выключение..."
+        status = on ? I18n.t("turning_on") : I18n.t("turning_off")
         pAction.command = ["bluetoothctl", "power", on ? "on" : "off"]
         pAction.running = true
     }
@@ -41,10 +41,13 @@ Item {
     function setScan(on) {
         scanning = on
         if (on) {
-            status = "Поиск устройств..."
+            status = I18n.t("searching_devices")
             pScan.running = true
         } else {
+            // убийство процесса не останавливает скан в контроллере —
+            // явно шлём scan off, иначе скан висит и жрёт батарею
             pScan.running = false
+            pScanOff.running = true
             status = ""
         }
     }
@@ -118,7 +121,7 @@ Item {
 
                 Text {
                     anchors.verticalCenter: parent.verticalCenter
-                    text: "Устройства"
+                    text: I18n.t("devices")
                     font.family: Theme.fontFamily
                     font.pixelSize: 13
                     font.weight: Font.DemiBold
@@ -219,7 +222,7 @@ Item {
                     Text {
                         width: devsCol.width
                         visible: root.devices.length === 0
-                        text: !root.powered ? "Bluetooth выключен" : "Нет сопряжённых устройств"
+                        text: !root.powered ? I18n.t("bt_off") : I18n.t("no_paired_devices")
                         font.family: Theme.fontFamily
                         font.pixelSize: 12
                         color: Theme.textDim
@@ -272,7 +275,7 @@ Item {
                                 anchors.right: parent.right
                                 anchors.rightMargin: 10
                                 anchors.verticalCenter: parent.verticalCenter
-                                text: modelData.connected ? "подключено" : ""
+                                text: modelData.connected ? I18n.t("connected") : ""
                                 font.family: Theme.fontFamily
                                 font.pixelSize: 10
                                 color: Theme.textDim
@@ -343,6 +346,12 @@ Item {
         id: pScan
 
         command: ["bluetoothctl", "scan", "on"]
+    }
+
+    Process {
+        id: pScanOff
+
+        command: ["bluetoothctl", "scan", "off"]
     }
 
     Timer {

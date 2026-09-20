@@ -45,7 +45,9 @@ PanelWindow {
         id: armTimer
         interval: 200
         onTriggered: {
-            if (root.target)
+            // только открываем: повторный ховер при открытой панели
+            // не должен её закрывать
+            if (root.target && !root.target.open)
                 root.target.toggleOpen()
         }
     }

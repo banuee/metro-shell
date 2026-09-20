@@ -1,21 +1,6 @@
 #!/usr/bin/env python3
-# metro-colors — акцент темы metro под текущие обои
-#
-#   metro-colors                применить акцент от текущих обоев (awww)
-#   metro-colors <image>        применить от указанной картинки
-#   metro-colors --vivid [img]  поднять насыщенность акцента (x1.3)
-#   metro-colors palette [img]  4-5 цветов-кандидатов из обоев (hex, по строке)
-#   metro-colors set <hex>      применить конкретный цвет как акцент
-#   metro-colors save-defaults  зафиксировать ТЕКУЩИЕ файлы как эталон сброса
-#   metro-colors status         показать текущий акцент
-#   metro-colors --status-hex   показать только hex
-#   metro-colors reset          откатить тему к эталону (save-defaults)
-#
-# Меняет: Theme.qml (teal) + тёмный оттенок кнопки «изменить» в TopPanel.qml
-# + hyprlock.conf (обои по маркеру m:bg, акцент m:accent-*) — если файл есть.
-# Копии Theme.qml в инстансах metro-settings/metro-lock перезаписываются.
-# Стеклянные токены (bg/glass/stroke) и WP-цвета статусов не трогает.
-# Quickshell сам перезагружает конфиг при сохранении файла.
+"""metro-colors — Dynamic Color Engine for Material You, Metro Live, and Windows Phone
+"""
 
 import argparse
 import colorsys
@@ -27,31 +12,97 @@ import shutil
 import subprocess
 import sys
 import time
+from pathlib import Path
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+try:
+    import metro_conf
+    from metro_conf import conf_float, conf_int
+except ImportError:
+    metro_conf = None
+
+    def conf_float(cfg, key, lo=0.0, hi=1.0):
+        try:
+            return max(lo, min(hi, float(cfg.get(key, 0.3))))
+        except (ValueError, TypeError):
+            return 0.3
+
+    def conf_int(cfg, key, lo=0, hi=64):
+        try:
+            return max(lo, min(hi, int(float(cfg.get(key, 16)))))
+        except (ValueError, TypeError):
+            return 16
+
+
+def conf():
+    if metro_conf is not None:
+        return metro_conf.load()
+    return {}
 
 DIR = os.path.expanduser("~/.config/quickshell/metro")
 THEME = os.path.join(DIR, "Theme.qml")
 TOPPANEL = os.path.join(DIR, "TopPanel.qml")
 BACKUP_DIR = os.path.join(DIR, ".theme-backup")
 
-LOCK_CONF = os.path.expanduser("~/.config/hypr/hyprlock.conf")
-SETTINGS_THEME = os.path.expanduser(
-    "~/.config/quickshell/metro-settings/Theme.qml")
-LOCK_THEME = os.path.expanduser(
-    "~/.config/quickshell/metro-lock/Theme.qml")
+SETTINGS_THEME = os.path.expanduser("~/.config/quickshell/metro-settings/Theme.qml")
+LOCK_THEME = os.path.expanduser("~/.config/quickshell/metro-lock/Theme.qml")
+SHOT_THEME = os.path.expanduser("~/.config/quickshell/metro-shot/Theme.qml")
+
+MAKO_CONF = os.path.expanduser("~/.config/mako/config")
+
+MANAGED_TARGETS = [
+    ("metro_theme", THEME, "theme"),
+    ("settings_theme", SETTINGS_THEME, "theme"),
+    ("lock_theme", LOCK_THEME, "theme"),
+    # shot НЕ в списке: у metro-shot своя тема (фон/прозрачность тулбара),
+    # глобальный рерайт ломал её. Акцент туда дотягивается teal-патчем ниже.
+]
+
+# Per-tool доводка, которую apply НЕ затирает общим контентом.
+# settings — FloatingWindow поверх десктопа: нужен читаемый тёмный фон
+# (совпадает с settings_theme.default.qml); остальные тулы — frosted white.
+GLASS_DEEP_OVERRIDE = {
+    "settings_theme": "Qt.rgba(0.10, 0.10, 0.10, 0.3)",
+}
+
+GLASS_DEEP_RE = re.compile(r"(readonly property color glassDeep:\s*).*")
 
 TEAL_RE = re.compile(r'(readonly property color teal:\s*)"[^"]*"')
-EDIT_RE = re.compile(r'(color:\s*root\.editMode \? )"#[0-9a-fA-F]{6}"')
 
-# маркеры «# m:<id>» в hyprlock.conf — значения этих строк перезаписываются
-MARK_RE = re.compile(
-    r'(?m)^([ \t]*)#[ \t]*m:([\w-]+)[ \t]*\n([ \t]*)([\w_]+)[ \t]*=[ \t]*[^\n]*$')
-
-DEFAULT_TEAL = "#00aba9"
+DEFAULT_TOKENS = {
+    "primary": "#8cd5b3",
+    "on_primary": "#003826",
+    "primary_container": "#005139",
+    "on_primary_container": "#a8f2ce",
+    "secondary": "#b3ccbe",
+    "on_secondary": "#1f352b",
+    "secondary_container": "#354b41",
+    "on_secondary_container": "#cfe8d9",
+    "tertiary": "#a5ccdf",
+    "on_tertiary": "#073543",
+    "tertiary_container": "#234c5b",
+    "on_tertiary_container": "#c1e8fc",
+    "surface": "#0f1512",
+    "on_surface": "#dee4df",
+    "surface_variant": "#404944",
+    "on_surface_variant": "#bfc9c2",
+    "surface_container_lowest": "#0a0f0d",
+    "surface_container_low": "#171d1a",
+    "surface_container": "#1b211e",
+    "surface_container_high": "#252b28",
+    "surface_container_highest": "#303633",
+    "outline": "#89938d",
+    "outline_variant": "#404944",
+    "error": "#ffb4ab",
+    "on_error": "#690005",
+    "error_container": "#93000a",
+    "on_error_container": "#ffdad6",
+}
 
 
 def hex_to_hls(hx):
     hx = hx.lstrip("#")
-    r, g, b = (int(hx[i:i + 2], 16) / 255 for i in (0, 2, 4))
+    r, g, b = (int(hx[i:i + 2], 16) / 255.0 for i in (0, 2, 4))
     return colorsys.rgb_to_hls(r, g, b)
 
 
@@ -60,150 +111,7 @@ def hls_to_hex(h, l, s):
     return "#%02x%02x%02x" % tuple(round(c * 255) for c in (r, g, b))
 
 
-def accent_from_hex(src, vivid=False):
-    h, l, s = hex_to_hls(src)
-    if vivid:
-        s = min(1.0, s * 1.3)
-    l = max(0.34, min(0.45, l))
-    return hls_to_hex(h, l, s)
-
-
-def dark_variant(accent):
-    # тёмная подложка-подсветка акцента (текст кнопки «изменить» в editMode)
-    hx = accent.lstrip("#")
-    r, g, b = (int(hx[i:i + 2], 16) for i in (0, 2, 4))
-    return "#%02x%02x%02x" % tuple(min(255, round(c * 0.16) + 5) for c in (r, g, b))
-
-
-def rgba_dec(hexcol, alpha):
-    hx = hexcol.lstrip("#")
-    r, g, b = (int(hx[i:i + 2], 16) for i in (0, 2, 4))
-    return f"rgba({r}, {g}, {b}, {alpha})"
-
-
-def lock_values(accent, image):
-    return {
-        "bg": image,
-        "accent-hero": rgba_dec(accent, 0.92),
-        "accent-check": rgba_dec(accent, 0.95),
-    }
-
-
-def patch_markers(path, values):
-    """Заменяешь значения строк после комментариев «# m:<id>»."""
-    with open(path, encoding="utf-8") as f:
-        old = f.read()
-
-    def repl(m):
-        ind, mk, kind, key = m.group(1), m.group(2), m.group(3), m.group(4)
-        if mk not in values:
-            return m.group(0)
-        v = values[mk]
-        if v is None:
-            return m.group(0)
-        val = os.path.expanduser(str(v)) if mk == "bg" else str(v)
-        return f"{ind}# m:{mk}\n{kind}{key} = {val}"
-
-    new = MARK_RE.sub(repl, old)
-    if new == old:
-        return False
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        f.write(new)
-    os.replace(tmp, path)
-    return True
-
-
-def current_wallpaper():
-    # 1) живой ответ демона awww
-    try:
-        r = subprocess.run(["awww", "query"], capture_output=True,
-                           text=True, timeout=3)
-        if r.returncode == 0:
-            hits = re.findall(r'(\/[^\s,]+\.(?:jpe?g|png|webp|gif|bmp))',
-                              r.stdout, re.I)
-            for h in hits:
-                path = os.path.expanduser(h.rstrip(".,)"))
-                if os.path.isfile(path):
-                    return path
-    except Exception:
-        pass
-    # 2) путь, сохранённый скриптом wall
-    st = os.path.expanduser("~/.local/state/metro/wall")
-    if os.path.isfile(st):
-        try:
-            path = open(st).read().strip()
-            if os.path.isfile(path):
-                return path
-        except Exception:
-            pass
-    # 3) legacy: wbg в автозапуске / hyprland.lua
-    try:
-        out = subprocess.run(["pgrep", "-a", "-x", "wbg"],
-                             capture_output=True, text=True).stdout.strip()
-        if out:
-            path = os.path.expanduser(out.splitlines()[0].split()[-1])
-            if os.path.isfile(path):
-                return path
-    except Exception:
-        pass
-    lua = os.path.expanduser("~/.config/hypr/hyprland.lua")
-    if os.path.isfile(lua):
-        m = re.search(r'wbg\s+-s\s+(?:"([^"]+)"|(\S+))',
-                      open(lua, encoding="utf-8").read())
-        if m:
-            path = os.path.expanduser(m.group(1) or m.group(2))
-            if os.path.isfile(path):
-                return path
-    return None
-
-
-def accent_via_matugen(image):
-    if os.environ.get("METROCOLORS_NO_MATUGEN"):
-        raise RuntimeError("matugen disabled (test)")
-    r = subprocess.run(
-        ["matugen", "image", image, "--mode", "dark", "--dry-run",
-         "-j", "hex", "--prefer",
-         os.environ.get("METROCOLORS_PREFER", "saturation")],
-        capture_output=True, text=True)
-    if r.returncode != 0:
-        raise RuntimeError(r.stderr.strip().splitlines()[-1] if r.stderr else "matugen failed")
-    data = json.loads(r.stdout)
-    return data["colors"]["source_color"]["dark"]["color"]
-
-
-def accent_via_pil(image):
-    from PIL import Image
-    im = Image.open(image).convert("RGB").resize((96, 96))
-    q = im.quantize(colors=48, method=Image.Quantize.MEDIANCUT).convert("RGB")
-    raw = q.tobytes()
-    counts = {}
-    for i in range(0, len(raw), 3):
-        px = (raw[i], raw[i + 1], raw[i + 2])
-        counts[px] = counts.get(px, 0) + 1
-
-    def score(px):
-        h, l, s = colorsys.rgb_to_hls(*[c / 255 for c in px])
-        w = (0.05 + s ** 2) * (1.5 if 0.15 < l < 0.8 else 0.3)
-        return counts[px] * w
-
-    best = max(counts, key=score)
-    return "#%02x%02x%02x" % best
-
-
-def pick_accent(image):
-    src = None
-    try:
-        src = accent_via_matugen(image)
-    except Exception as e:
-        print(f"[metro-colors] matugen failed ({e}), fallback PIL", file=sys.stderr)
-    if src is None:
-        src = accent_via_pil(image)
-    return src
-
-
 def normalize(hx, lo, hi, smin):
-    """Кламп светлоты + минимальная насыщенность (тусклое → сочное)."""
     h, l, s = hex_to_hls(hx)
     return hls_to_hex(h, max(lo, min(hi, l)), max(smin, min(1.0, s)))
 
@@ -213,238 +121,827 @@ def hue_dist(a, b):
     return min(d, 1.0 - d)
 
 
-def palette_from_pil(image, limit=4):
-    """Доминирующие цвета обоев (PIL mediancut), нормализованные под акцент:
-    L∈[0.36,0.52], s≥0.42, серые выкинуты, близкие по тону схлопнуты."""
-    from PIL import Image
-    im = Image.open(image).convert("RGB").resize((128, 128))
-    q = im.quantize(colors=64, method=Image.Quantize.MEDIANCUT).convert("RGB")
-    raw = q.tobytes()
-    counts = {}
-    for i in range(0, len(raw), 3):
-        px = (raw[i], raw[i + 1], raw[i + 2])
-        counts[px] = counts.get(px, 0) + 1
-    scored = sorted(counts.items(), key=lambda kv: -kv[1])
-    out = []
-    for px, _cnt in scored:
-        hx = "#%02x%02x%02x" % px
-        h, l, s = hex_to_hls(hx)
-        if s < 0.14:
-            continue
-        cand = normalize(hx, 0.36, 0.52, 0.42)
-        ch, cl, _ = hex_to_hls(cand)
-        if any(hue_dist(ch, eh) < 0.055 and abs(cl - el) < 0.14
-               for ex, el, eh in out):
-            continue
-        out.append((cand, cl, ch))
-        if len(out) >= limit:
-            break
-    return [c for c, _l, _h in out]
+def extract_vivid_accent(image_path=None, hex_color=None):
+    if hex_color:
+        return hex_color
+    if not image_path or not os.path.isfile(image_path):
+        return "#00aba9"
 
-
-def palette(image):
-    """Кандидаты акцента из обоев: matugen-source + сочные цвета из картинки."""
-    cands = []
+    # 1. Try matugen saturation prefer
     try:
-        cands.append(accent_from_hex(accent_via_matugen(image)))
-    except Exception as e:
-        print(f"[metro-colors] matugen failed ({e})", file=sys.stderr)
-    for cand in palette_from_pil(image):
-        ch, cl, _ = hex_to_hls(cand)
-        if any(hue_dist(ch, eh) < 0.055 and abs(cl - el) < 0.14
-               for ex, el, eh in
-               [(c, *hex_to_hls(c)[1:]) for c in cands]):
-            continue
-        cands.append(cand)
-        if len(cands) >= 5:
-            break
-    return cands
+        r = subprocess.run(
+            ["matugen", "image", image_path, "--mode", "dark", "--dry-run", "-j", "hex", "--prefer", "saturation"],
+            capture_output=True, text=True, timeout=4
+        )
+        if r.returncode == 0:
+            data = json.loads(r.stdout)
+            src = data.get("colors", {}).get("source_color", {}).get("dark", {}).get("color", "")
+            if src:
+                return normalize(src, 0.38, 0.56, 0.50)
+    except Exception:
+        pass
+
+    # 2. Try PIL mediancut fallback
+    try:
+        from PIL import Image
+        im = Image.open(image_path).convert("RGB").resize((96, 96))
+        q = im.quantize(colors=48, method=Image.Quantize.MEDIANCUT).convert("RGB")
+        raw = q.tobytes()
+        counts = {}
+        for i in range(0, len(raw), 3):
+            px = (raw[i], raw[i + 1], raw[i + 2])
+            counts[px] = counts.get(px, 0) + 1
+
+        def score(px):
+            h, l, s = colorsys.rgb_to_hls(*[c / 255.0 for c in px])
+            w = (0.05 + s ** 2) * (1.5 if 0.20 < l < 0.80 else 0.3)
+            return counts[px] * w
+
+        best = max(counts, key=score)
+        hx = "#%02x%02x%02x" % best
+        return normalize(hx, 0.38, 0.56, 0.50)
+    except Exception:
+        return "#00aba9"
 
 
-def sync_settings():
-    """У инстансов metro-settings/metro-lock СВОИ копии Theme.qml (симлинк
-    на ../metro/Theme.qml watcher quickshell не видит). Копируем in-place —
-    инстансы перезагружаются сами."""
-    for dst in (SETTINGS_THEME, LOCK_THEME):
-        if not os.path.isdir(os.path.dirname(dst)):
-            continue
-        if os.path.islink(dst):
-            os.unlink(dst)
-        shutil.copy2(THEME, dst)
+def palette_from_pil(image, limit=5):
+    try:
+        from PIL import Image
+        im = Image.open(image).convert("RGB").resize((128, 128))
+        q = im.quantize(colors=64, method=Image.Quantize.MEDIANCUT).convert("RGB")
+        raw = q.tobytes()
+        counts = {}
+        for i in range(0, len(raw), 3):
+            px = (raw[i], raw[i + 1], raw[i + 2])
+            counts[px] = counts.get(px, 0) + 1
+        scored = sorted(counts.items(), key=lambda kv: -kv[1])
+        out = []
+        for px, _cnt in scored:
+            hx = "#%02x%02x%02x" % px
+            h, l, s = hex_to_hls(hx)
+            if s < 0.14:
+                continue
+            cand = normalize(hx, 0.36, 0.54, 0.45)
+            ch, cl, _ = hex_to_hls(cand)
+            if any(hue_dist(ch, eh) < 0.06 and abs(cl - el) < 0.15 for ex, el, eh in out):
+                continue
+            out.append((cand, cl, ch))
+            if len(out) >= limit:
+                break
+        return [c for c, _l, _h in out]
+    except Exception:
+        return ["#00aba9", "#0050ef", "#a200ff", "#10893e", "#e51400"]
 
 
-def backup(files):
+def get_active_theme_id():
+    # Источник правды — metro-shell.conf; state-файл — для совместимости.
+    try:
+        t = conf().get("theme", "").strip()
+        if t in ("material", "metro", "wp"):
+            return t
+    except Exception:
+        pass
+    st = os.path.expanduser("~/.local/state/metro/theme")
+    if os.path.isfile(st):
+        try:
+            t = open(st).read().strip()
+            if t in ("material", "metro", "wp"):
+                return t
+        except Exception:
+            pass
+    return "metro"
+
+
+def conf_write(key, value):
+    """Записать ключ в metro-shell.conf (структура/комменты сохраняются).
+    Пустая запись пропускается — иначе вотчер конфига зациклится."""
+    try:
+        if metro_conf is not None and metro_conf.load().get(key) == value:
+            return
+    except Exception:
+        pass
+    r = subprocess.run(["metro-conf", "set", "--no-apply", key, value],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        print(f"[metro-colors] conf write failed: {r.stderr.strip()}", file=sys.stderr)
+
+
+def backup():
     os.makedirs(BACKUP_DIR, exist_ok=True)
-    ts = time.strftime("%Y%m%d-%H%M%S")
-    for f in files:
-        base = os.path.basename(f)
-        dflt = os.path.join(BACKUP_DIR, base + ".default")
-        if not os.path.exists(dflt):
-            shutil.copy2(f, dflt)
-        shutil.copy2(f, os.path.join(BACKUP_DIR, f"{base}.{ts}"))
-    snaps = sorted(glob.glob(os.path.join(BACKUP_DIR, "*.qml"))
-                   + glob.glob(os.path.join(BACKUP_DIR, "*.conf")))
-    for old in sorted(g for g in snaps if not g.endswith(".default"))[:-10]:
-        os.remove(old)
-
-
-DEFAULT_FILES = (THEME, TOPPANEL, LOCK_CONF)
+    ts = int(time.time())
+    for tag, path, _ in MANAGED_TARGETS:
+        if os.path.isfile(path):
+            ext = os.path.splitext(path)[1] or ".qml"
+            shutil.copy2(path, os.path.join(BACKUP_DIR, f"{tag}-{ts}{ext}"))
+    for tag, _, _ in MANAGED_TARGETS:
+        files = sorted(glob.glob(os.path.join(BACKUP_DIR, f"{tag}-*")))
+        for f in files[:-5]:
+            try:
+                os.remove(f)
+            except OSError:
+                pass
 
 
 def save_defaults():
-    """Снимаем .default С ТЕКУЩЕГО состояния — дальше --reset откатывает
-    к нему, а не к древним снапшотам времён создания настроек."""
     os.makedirs(BACKUP_DIR, exist_ok=True)
-    for f in DEFAULT_FILES:
-        if os.path.isfile(f):
-            shutil.copy2(f, os.path.join(BACKUP_DIR,
-                                         os.path.basename(f) + ".default"))
-    print("эталон сброса обновлён: " + ", ".join(
-        os.path.basename(f) for f in DEFAULT_FILES if os.path.isfile(f)))
+    saved = 0
+    for tag, path, _ in MANAGED_TARGETS:
+        if os.path.isfile(path):
+            ext = os.path.splitext(path)[1] or ".qml"
+            dst = os.path.join(BACKUP_DIR, f"{tag}.default{ext}")
+            shutil.copy2(path, dst)
+            saved += 1
+    print(f"saved benchmark defaults ({saved} files)")
 
 
 def restore_defaults():
-    restored = []
-    for f in DEFAULT_FILES:
-        dflt = os.path.join(BACKUP_DIR, os.path.basename(f) + ".default")
-        if os.path.isfile(dflt):
-            shutil.copy2(dflt, f)
-            restored.append(os.path.basename(f))
-    if restored:
-        print("восстановлено: " + ", ".join(restored))
+    restored = 0
+    for tag, path, _ in MANAGED_TARGETS:
+        ext = os.path.splitext(path)[1] or ".qml"
+        src = os.path.join(BACKUP_DIR, f"{tag}.default{ext}")
+        if os.path.isfile(src):
+            shutil.copy2(src, path)
+            restored += 1
+    if restored > 0:
+        print(f"restored {restored} files from benchmark")
     else:
-        print("[metro-colors] нет эталона — сначала save-defaults",
-              file=sys.stderr)
+        print("[metro-colors] no benchmark saved — run save-defaults first", file=sys.stderr)
 
 
-def patch(path, value):
-    with open(path, encoding="utf-8") as f:
-        old = f.read()
-    m = TEAL_RE if path == THEME else EDIT_RE
-    new = m.sub(lambda mm: mm.group(1) + '"' + value + '"', old, count=1)
-    if new == old:
+def current_wallpaper():
+    st = os.path.expanduser("~/.local/state/metro/wall")
+    if os.path.isfile(st):
+        try:
+            path = open(st).read().strip()
+            if os.path.isfile(path):
+                return path
+        except Exception:
+            pass
+    return None
+
+
+def extract_tokens_matugen(image_path=None, hex_color=None):
+    if hex_color:
+        cmd = ["matugen", "color", "hex", hex_color, "--json", "hex", "--mode", "dark"]
+    elif image_path:
+        cmd = ["matugen", "image", image_path, "--source-color-index", "0", "--json", "hex", "--mode", "dark"]
+    else:
+        return dict(DEFAULT_TOKENS)
+
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+        if r.returncode != 0:
+            print(f"[metro-colors] matugen error: {r.stderr.strip()}", file=sys.stderr)
+            return dict(DEFAULT_TOKENS)
+        data = json.loads(r.stdout)
+        colors = data.get("colors", {})
+        tokens = dict(DEFAULT_TOKENS)
+        for k in tokens.keys():
+            if k in colors:
+                val = colors[k].get("dark", colors[k].get("default", {})).get("color", "")
+                if val:
+                    tokens[k] = val
+        return tokens
+    except Exception as e:
+        print(f"[metro-colors] matugen exception: {e}", file=sys.stderr)
+        return dict(DEFAULT_TOKENS)
+
+
+def build_theme_qml(tokens, theme_name="material", vivid_accent=None, cfg=None):
+    cfg = cfg or conf()
+    is_wp = theme_name == "wp"
+    is_metro = theme_name == "metro"
+    is_mat = not is_wp and not is_metro
+
+    p = vivid_accent or tokens.get("primary", DEFAULT_TOKENS["primary"])
+
+    # Per-panel поверхности из metro-shell.conf (только metro; у wp/material
+    # своя айдентика — им подставляем общие bg/radius ниже).
+    panel_top_bg = panel_left_bg = panel_right_bg = None
+    panel_top_radius = panel_left_radius = panel_right_radius = None
+
+    if is_wp:
+        font_family = "Segoe UI Variable Static Text"
+        headline_font = "Segoe UI Variable Static Display Light"
+        icon_font = "NotoSans Nerd Font"
+        radius = 0
+        radius_small = 0
+        radius_large = 0
+        radius_pill = 0
+        panel_radius = 0
+        bg_str = "Qt.rgba(0.04, 0.04, 0.04, 0.85)"
+        bg_card_str = "Qt.rgba(1, 1, 1, 0.08)"
+        bg_card_hover_str = "Qt.rgba(1, 1, 1, 0.15)"
+        glass_str = "Qt.rgba(1, 1, 1, 0.08)"
+        glass_hover_str = "Qt.rgba(1, 1, 1, 0.15)"
+        glass_deep_str = "Qt.rgba(0.06, 0.06, 0.06, 0.95)"
+        stroke_str = "Qt.rgba(1, 1, 1, 0.10)"
+        stroke_strong_str = "Qt.rgba(1, 1, 1, 0.25)"
+        tile_alpha = 1.0
+        text_str = '"#f7f7f7"'
+        text_dim_str = "Qt.rgba(1, 1, 1, 0.60)"
+        primary_token = p
+        on_primary_token = "#ffffff"
+    elif is_metro:
+        font_family = cfg.get("fonts.family", "Segoe UI Variable Static Text")
+        headline_font = cfg.get("fonts.headline", "Segoe UI Variable Static Display Light")
+        icon_font = cfg.get("fonts.icon", "NotoSans Nerd Font")
+        radius = 10
+        radius_small = 8
+        radius_large = 14
+        radius_pill = 999
+        panel_radius = 16
+        bg_str = "Qt.rgba(0.10, 0.10, 0.10, 0.30)"
+        bg_card_str = "Qt.rgba(1, 1, 1, 0.07)"
+        bg_card_hover_str = "Qt.rgba(1, 1, 1, 0.12)"
+        glass_str = "Qt.rgba(1, 1, 1, 0.07)"
+        glass_hover_str = "Qt.rgba(1, 1, 1, 0.12)"
+        glass_deep_str = "Qt.rgba(255, 255, 255, 0.06)"
+        stroke_str = "Qt.rgba(1, 1, 1, 0.08)"
+        stroke_strong_str = "Qt.rgba(1, 1, 1, 0.15)"
+        tile_alpha = 0.85
+        text_str = '"#f7f7f7"'
+        text_dim_str = "Qt.rgba(1, 1, 1, 0.60)"
+        primary_token = p
+        on_primary_token = "#ffffff"
+        panel_top_bg = "Qt.rgba(0.10, 0.10, 0.10, %.2f)" % conf_float(cfg, "panel.toppanel_bg")
+        panel_left_bg = "Qt.rgba(0.10, 0.10, 0.10, %.2f)" % conf_float(cfg, "panel.launcher_bg")
+        panel_right_bg = "Qt.rgba(0.10, 0.10, 0.10, %.2f)" % conf_float(cfg, "panel.control_bg")
+        panel_top_radius = conf_int(cfg, "panel.toppanel_radius")
+        panel_left_radius = conf_int(cfg, "panel.launcher_radius")
+        panel_right_radius = conf_int(cfg, "panel.control_radius")
+    else:  # material
+        font_family = "Google Sans"
+        headline_font = "Google Sans"
+        icon_font = "NotoSans Nerd Font"
+        radius = 24
+        radius_small = 14
+        radius_large = 28
+        radius_pill = 999
+        panel_radius = 28
+        bg_str = "Qt.rgba(surface.r, surface.g, surface.b, 0.90)"
+        bg_card_str = "surface_container"
+        bg_card_hover_str = "surface_container_high"
+        glass_str = "surface_container"
+        glass_hover_str = "surface_container_high"
+        glass_deep_str = "Qt.rgba(surface_container_lowest.r, surface_container_lowest.g, surface_container_lowest.b, 0.96)"
+        stroke_str = "Qt.rgba(outline_variant.r, outline_variant.g, outline_variant.b, 0.22)"
+        stroke_strong_str = "Qt.rgba(outline.r, outline.g, outline.b, 0.38)"
+        tile_alpha = 1.0
+        text_str = "on_surface"
+        text_dim_str = "on_surface_variant"
+        primary_token = tokens.get('primary', DEFAULT_TOKENS['primary'])
+        on_primary_token = tokens.get('on_primary', DEFAULT_TOKENS['on_primary'])
+
+    if panel_top_bg is None:
+        # wp/material: per-panel токенов нет — панели делят общий фон/радиус
+        panel_top_bg = panel_left_bg = panel_right_bg = bg_str
+        panel_top_radius = panel_left_radius = panel_right_radius = panel_radius
+
+    return f"""pragma Singleton
+import QtQuick
+
+QtObject {{
+    readonly property string themeName: "{theme_name}"
+    readonly property bool isMaterial: themeName === "material"
+    readonly property bool isWP: themeName === "wp"
+    readonly property bool isMetro: themeName === "metro"
+    readonly property bool isLiquidGlass: false
+
+    readonly property string fontFamily: "{font_family}"
+    readonly property string headlineFont: "{headline_font}"
+    readonly property string iconFont: "{icon_font}"
+
+    // Material 3 Dynamic Color Tokens (M3 / Material You)
+    readonly property color primary: "{primary_token}"
+    readonly property color on_primary: "{on_primary_token}"
+    readonly property color primary_container: "{tokens.get('primary_container', DEFAULT_TOKENS['primary_container'])}"
+    readonly property color on_primary_container: "{tokens.get('on_primary_container', DEFAULT_TOKENS['on_primary_container'])}"
+
+    readonly property color secondary: "{tokens.get('secondary', DEFAULT_TOKENS['secondary'])}"
+    readonly property color on_secondary: "{tokens.get('on_secondary', DEFAULT_TOKENS['on_secondary'])}"
+    readonly property color secondary_container: "{tokens.get('secondary_container', DEFAULT_TOKENS['secondary_container'])}"
+    readonly property color on_secondary_container: "{tokens.get('on_secondary_container', DEFAULT_TOKENS['on_secondary_container'])}"
+
+    readonly property color tertiary: "{tokens.get('tertiary', DEFAULT_TOKENS['tertiary'])}"
+    readonly property color on_tertiary: "{tokens.get('on_tertiary', DEFAULT_TOKENS['on_tertiary'])}"
+    readonly property color tertiary_container: "{tokens.get('tertiary_container', DEFAULT_TOKENS['tertiary_container'])}"
+    readonly property color on_tertiary_container: "{tokens.get('on_tertiary_container', DEFAULT_TOKENS['on_tertiary_container'])}"
+
+    readonly property color surface: "{tokens.get('surface', DEFAULT_TOKENS['surface'])}"
+    readonly property color on_surface: "{tokens.get('on_surface', DEFAULT_TOKENS['on_surface'])}"
+    readonly property color surface_variant: "{tokens.get('surface_variant', DEFAULT_TOKENS['surface_variant'])}"
+    readonly property color on_surface_variant: "{tokens.get('on_surface_variant', DEFAULT_TOKENS['on_surface_variant'])}"
+
+    readonly property color surface_container_lowest: "{tokens.get('surface_container_lowest', DEFAULT_TOKENS['surface_container_lowest'])}"
+    readonly property color surface_container_low: "{tokens.get('surface_container_low', DEFAULT_TOKENS['surface_container_low'])}"
+    readonly property color surface_container: "{tokens.get('surface_container', DEFAULT_TOKENS['surface_container'])}"
+    readonly property color surface_container_high: "{tokens.get('surface_container_high', DEFAULT_TOKENS['surface_container_high'])}"
+    readonly property color surface_container_highest: "{tokens.get('surface_container_highest', DEFAULT_TOKENS['surface_container_highest'])}"
+
+    readonly property color outline: "{tokens.get('outline', DEFAULT_TOKENS['outline'])}"
+    readonly property color outline_variant: "{tokens.get('outline_variant', DEFAULT_TOKENS['outline_variant'])}"
+
+    readonly property color error: "{tokens.get('error', DEFAULT_TOKENS['error'])}"
+    readonly property color on_error: "{tokens.get('on_error', DEFAULT_TOKENS['on_error'])}"
+    readonly property color error_container: "{tokens.get('error_container', DEFAULT_TOKENS['error_container'])}"
+    readonly property color on_error_container: "{tokens.get('on_error_container', DEFAULT_TOKENS['on_error_container'])}"
+
+    // Accent & Compatibility Bindings
+    readonly property color teal: "{p}"
+    readonly property color accent: teal
+
+    // WP-палитра функциональных цветов (CPU/RAM/GPU/BAT, ошибки и т.п.)
+    readonly property color purple: "#a200ff"
+    readonly property color orange: "#f09609"
+    readonly property color green: "#10893e"
+    readonly property color lime: "#7e9600"
+    readonly property color red: "#e51400"
+
+    // Background & Card surfaces
+    readonly property color bg: {bg_str}
+    readonly property color bgCard: {bg_card_str}
+    readonly property color bgCardHover: {bg_card_hover_str}
+    readonly property color text: {text_str}
+    readonly property color textDim: {text_dim_str}
+
+    readonly property color glass: {glass_str}
+    readonly property color glassHover: {glass_hover_str}
+    readonly property color glassDeep: {glass_deep_str}
+    readonly property color stroke: {stroke_str}
+    readonly property color strokeStrong: {stroke_strong_str}
+
+    // Radii & Dimensions
+    readonly property int unit: 84
+    readonly property int gap: 8
+    readonly property int radius: {radius}
+    readonly property int radiusSmall: {radius_small}
+    readonly property int radiusLarge: {radius_large}
+    readonly property int radiusPill: {radius_pill}
+    readonly property int panelRadius: {panel_radius}
+    readonly property int panelWidth: 400
+    readonly property real tileAlpha: {tile_alpha}
+
+    // Per-panel поверхности (metro-shell.conf → panel.*)
+    readonly property color panelTopBg: {panel_top_bg}
+    readonly property color panelLeftBg: {panel_left_bg}
+    readonly property color panelRightBg: {panel_right_bg}
+    readonly property int panelTopRadius: {panel_top_radius}
+    readonly property int panelLeftRadius: {panel_left_radius}
+    readonly property int panelRightRadius: {panel_right_radius}
+
+    function tileW(cols) {{
+        return cols * unit + (cols - 1) * gap
+    }}
+
+    function tileH(rows) {{
+        return rows * unit + (rows - 1) * gap
+    }}
+
+    function alpha(c, a) {{
+        return Qt.rgba(c.r, c.g, c.b, a)
+    }}
+}}
+"""
+
+
+def preview(label, hex_color):
+    try:
+        r = int(hex_color[1:3], 16)
+        g = int(hex_color[3:5], 16)
+        b = int(hex_color[5:7], 16)
+        print(f"  \033[48;2;{r};{g};{b}m  \033[0m {label:<32} {hex_color}")
+    except Exception:
+        print(f"  {label:<32} {hex_color}")
+
+
+def _mako_alpha(hex6, aa):
+    """#rrggbb + alpha-hex → #rrggbbaa (защита от мусора)."""
+    h = (hex6 or "").strip()
+    if not re.match(r"^#[0-9a-fA-F]{6}$", h):
+        h = "#00aba9"
+    return h + aa
+
+
+def _mako_user_values():
+    """timeout/anchor/max-visible юзера из текущего mako-конфига (пережить реген темы)."""
+    timeout, anchor, maxvis = 6000, "top-right", 3
+    try:
+        if os.path.isfile(MAKO_CONF):
+            txt = open(MAKO_CONF, encoding="utf-8").read()
+            m = re.search(r"^default-timeout\s*=\s*(\d+)", txt, re.MULTILINE)
+            if m:
+                timeout = int(m.group(1))
+            m = re.search(r"^anchor\s*=\s*(.+)$", txt, re.MULTILINE)
+            if m and m.group(1).strip():
+                anchor = m.group(1).strip()
+            m = re.search(r"^max-visible\s*=\s*(\d+)", txt, re.MULTILINE)
+            if m:
+                maxvis = int(m.group(1))
+    except Exception:
+        pass
+    return timeout, anchor, maxvis
+
+
+def build_mako_config(tokens, theme_name, vivid_accent):
+    timeout, anchor, maxvis = _mako_user_values()
+    if theme_name == "material":
+        primary = tokens.get("primary", DEFAULT_TOKENS["primary"])
+        surface_container = tokens.get("surface_container", DEFAULT_TOKENS["surface_container"])
+        surface_low = tokens.get("surface_container_low", DEFAULT_TOKENS["surface_container_low"])
+        on_surface = tokens.get("on_surface", DEFAULT_TOKENS["on_surface"])
+        on_variant = tokens.get("on_surface_variant", DEFAULT_TOKENS["on_surface_variant"])
+        outline_var = tokens.get("outline_variant", DEFAULT_TOKENS["outline_variant"])
+        error = tokens.get("error", DEFAULT_TOKENS["error"])
+        error_container = tokens.get("error_container", DEFAULT_TOKENS["error_container"])
+        on_error_container = tokens.get("on_error_container", DEFAULT_TOKENS["on_error_container"])
+        return f"""# Metro Shell — Material You notifications (Pixel UI, M3 dynamic color)
+# Generated by metro-colors from the wallpaper: bg/border/progress follow primary.
+font=Google Sans 11
+background-color={_mako_alpha(surface_container, "e6")}
+text-color={_mako_alpha(on_surface, "ff")}
+width=400
+height=150
+margin=20
+padding=14,18
+border-size=1
+border-color={_mako_alpha(primary, "88")}
+border-radius=18
+progress-color={_mako_alpha(primary, "ff")}
+icons=1
+max-icon-size=48
+actions=1
+markup=1
+format=<b>%s</b>\\n%b
+default-timeout={timeout}
+ignore-timeout=0
+layer=overlay
+anchor={anchor}
+max-visible={maxvis}
+sort=-time
+
+[urgency=low]
+border-color={_mako_alpha(outline_var, "66")}
+background-color={_mako_alpha(surface_low, "e6")}
+text-color={_mako_alpha(on_variant, "ff")}
+default-timeout=4000
+
+[urgency=normal]
+border-color={_mako_alpha(primary, "88")}
+background-color={_mako_alpha(surface_container, "e6")}
+
+[urgency=critical]
+border-color={_mako_alpha(error, "ff")}
+background-color={_mako_alpha(error_container, "e6")}
+text-color={_mako_alpha(on_error_container, "ff")}
+default-timeout=0
+"""
+    acc = vivid_accent or tokens.get("primary", "#00aba9")
+    if not re.match(r"^#[0-9a-fA-F]{6}$", acc):
+        acc = "#00aba9"
+    if theme_name == "wp":
+        return f"""# Metro Shell — Windows Phone notifications (True Metro, sharp corners)
+# Generated by metro-colors: border/progress follow wallpaper/pin ({acc}).
+font=Segoe UI Variable Static Text 11
+background-color=#000000e6
+text-color=#ffffffff
+width=380
+height=140
+margin=20
+padding=12,16
+border-size=2
+border-color={_mako_alpha(acc, "ff")}
+border-radius=0
+progress-color={_mako_alpha(acc, "ff")}
+icons=1
+max-icon-size=48
+actions=1
+markup=1
+format=<b>%s</b>\\n%b
+default-timeout={timeout}
+ignore-timeout=0
+layer=overlay
+anchor={anchor}
+max-visible={maxvis}
+sort=-time
+
+[urgency=low]
+border-color=#ffffff66
+default-timeout=4000
+
+[urgency=critical]
+border-color=#e51400ff
+background-color=#000000e6
+default-timeout=0
+text-color=#ffffffff
+"""
+    return f"""# Metro Shell — Metro Live Tiles notifications (acrylic + vivid accent)
+# Generated by metro-colors: border/progress follow wallpaper/pin ({acc}).
+font=Segoe UI Variable Static Text 11
+background-color=#12121ae6
+text-color=#f7f7f7ff
+width=380
+height=140
+margin=20
+padding=12,16
+border-size=1
+border-color={_mako_alpha(acc, "55")}
+border-radius=12
+progress-color={_mako_alpha(acc, "ff")}
+icons=1
+max-icon-size=48
+actions=1
+markup=1
+format=<b>%s</b>\\n%b
+default-timeout={timeout}
+ignore-timeout=0
+layer=overlay
+anchor={anchor}
+max-visible={maxvis}
+sort=-time
+
+[urgency=low]
+border-color=#ffffff30
+default-timeout=4000
+
+[urgency=critical]
+border-color=#e5484dff
+default-timeout=0
+text-color=#ffffffff
+"""
+
+
+def apply_mako_config(tokens, theme_name, vivid_accent):
+    """Перегенерировать ~/.config/mako/config под тему. Возвращает True если записали."""
+    try:
+        content = build_mako_config(tokens, theme_name, vivid_accent)
+        os.makedirs(os.path.dirname(MAKO_CONF), exist_ok=True)
+        old = ""
+        if os.path.isfile(MAKO_CONF):
+            with open(MAKO_CONF, encoding="utf-8") as f:
+                old = f.read()
+        if content != old:
+            with open(MAKO_CONF, "w", encoding="utf-8") as f:
+                f.write(content)
+            try:
+                subprocess.run(["makoctl", "reload"], capture_output=True, timeout=3)
+            except Exception:
+                pass
+            return True
         return False
-    # ВАЖНО: писать IN-PLACE (не tmp+os.replace). Замена файла = новый inode,
-    # watcher quickshell его теряет и reload нестабилен. Запись в тот же
-    # inode даёт честный modify-ивент — инстансы перезагружаются.
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(new)
-    return True
+    except OSError as e:
+        print(f"[metro-colors] mako write failed: {e}", file=sys.stderr)
+        return False
 
 
-def preview(label, hexcol):
-    hx = hexcol.lstrip("#")
-    r, g, b = (int(hx[i:i + 2], 16) for i in (0, 2, 4))
-    print(f"  {label:<12} \033[48;2;{r};{g};{b}m      \033[0m  {hexcol}")
+def apply_theme_colors(tokens, image=None, theme_name=None, custom_accent=None):
+    cfg = conf()
+    if not theme_name:
+        theme_name = get_active_theme_id()
+
+    # Акцент: явный custom > зафиксированный в конфиге hex (только metro/wp;
+    # у material свои динамические M3-токены — пин metro туда не протекает,
+    # иначе слайдеры CC темнеют; явный `set` в material работает как раньше).
+    pinned = cfg.get("accent", "auto").strip()
+    use_pin = pinned.startswith("#") and theme_name in ("wp", "metro")
+    if custom_accent and custom_accent != "auto":
+        vivid_acc = custom_accent
+        conf_write("accent", custom_accent)
+    elif custom_accent == "auto" or pinned == "auto":
+        vivid_acc = None
+        if theme_name in ("wp", "metro") and image:
+            vivid_acc = extract_vivid_accent(image)
+        if custom_accent == "auto":
+            conf_write("accent", "auto")
+    elif use_pin:
+        vivid_acc = pinned
+    else:
+        vivid_acc = None
+        if theme_name in ("wp", "metro") and image:
+            vivid_acc = extract_vivid_accent(image)
+
+    primary = vivid_acc or tokens.get("primary", DEFAULT_TOKENS["primary"])
+    container = tokens.get("primary_container", DEFAULT_TOKENS["primary_container"])
+    surface = tokens.get("surface", DEFAULT_TOKENS["surface"])
+
+    print(f"theme: {theme_name}")
+    print(f"wallpaper: {image}" if image else "wallpaper: not specified")
+    preview("primary/accent", primary)
+    if theme_name == "material":
+        preview("primary_container", container)
+        preview("surface", surface)
+    backup()
+
+    theme_content = build_theme_qml(tokens, theme_name, vivid_acc)
+
+    # Палитра логотипа (4 цвета) — без лишних вызовов matugen:
+    # metro/wp = vivid-акцент + реальные цвета PIL; material = токены M3.
+    if theme_name == "material":
+        logo_palette = [
+            tokens.get("primary", DEFAULT_TOKENS["primary"]),
+            tokens.get("secondary", DEFAULT_TOKENS["secondary"]),
+            tokens.get("tertiary", DEFAULT_TOKENS["tertiary"]),
+            tokens.get("primary_container", DEFAULT_TOKENS["primary_container"]),
+        ]
+    else:
+        logo_palette = []
+        if vivid_acc:
+            logo_palette.append(vivid_acc)
+        if image:
+            try:
+                for cand in palette_from_pil(image, limit=5):
+                    if cand not in logo_palette:
+                        logo_palette.append(cand)
+                    if len(logo_palette) >= 4:
+                        break
+            except Exception:
+                pass
+        while len(logo_palette) < 4:
+            logo_palette += ["#00aba9", "#0050ef", "#a200ff", "#10893e"]
+        logo_palette = logo_palette[:4]
+    try:
+        pal_path = os.path.expanduser("~/.local/state/metro/palette.json")
+        os.makedirs(os.path.dirname(pal_path), exist_ok=True)
+        with open(pal_path, "w", encoding="utf-8") as f:
+            json.dump(logo_palette, f)
+    except Exception as e:
+        print(f"[metro-colors] palette write failed: {e}", file=sys.stderr)
+
+    changed_count = 0
+    for tag, path, kind in MANAGED_TARGETS:
+        if kind == "theme":
+            content = theme_content
+            # Тёмный glassDeep настроек — только для metro + settings.glass=dark;
+            # иначе тема/фон не переключаются (баг 09.09: оверрайд душил material).
+            dark_settings = theme_name == "metro" and cfg.get("settings.glass", "dark") == "dark"
+            override = GLASS_DEEP_OVERRIDE.get(tag) if dark_settings else None
+            if override:
+                content = GLASS_DEEP_RE.sub(r"\1" + override, content)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(content)
+            changed_count += 1
+
+    # metro-shot: только teal-патч акцента (поверхности/прозрачность — свои).
+    # Отключается через shot.accent_follow = false в metro-shell.conf.
+    if cfg.get("shot.accent_follow", "true").lower() == "true" and os.path.isfile(SHOT_THEME):
+        try:
+            with open(SHOT_THEME, encoding="utf-8") as f:
+                shot = f.read()
+            shot2 = TEAL_RE.sub(r'\1"%s"' % primary, shot)
+            if shot2 != shot:
+                with open(SHOT_THEME, "w", encoding="utf-8") as f:
+                    f.write(shot2)
+                changed_count += 1
+        except OSError as e:
+            print(f"[metro-colors] shot teal patch failed: {e}", file=sys.stderr)
+
+    # mako: полный реген под тему (фон/рамка/прогресс/радиусы/шрифт).
+    # Юзерские timeout/anchor/max-visible подхватываются из текущего конфига.
+    if apply_mako_config(tokens, theme_name, vivid_acc):
+        changed_count += 1
+        preview("mako border/progress", primary)
+
+    # Композитор: дефолты темы, поверх — metro-shell.conf (compositor.*).
+    hypr_lua = Path.home() / ".config/hypr/hyprland.lua"
+    if hypr_lua.exists():
+        rounding_map = {"material": 24, "metro": 12, "wp": 0}
+        blur_map = {"material": "true", "metro": "true", "wp": "false"}
+        try:
+            rounding = int(float(cfg.get("compositor.rounding", rounding_map.get(theme_name, 12))))
+        except (ValueError, TypeError):
+            rounding = rounding_map.get(theme_name, 12)
+        blur_val = "true" if str(cfg.get("compositor.blur", blur_map.get(theme_name, "true"))).lower() == "true" else "false"
+        try:
+            hcontent = hypr_lua.read_text()
+            hcontent = re.sub(r'(blur\s*=\s*\{\s*enabled\s*=\s*)(true|false)', rf'\g<1>{blur_val}', hcontent)
+            hcontent = re.sub(r'(rounding\s*=\s*)\d+', rf'\g<1>{rounding}', hcontent)
+            hypr_lua.write_text(hcontent)
+            subprocess.run(["hyprctl", "reload"], capture_output=True, timeout=3)
+        except Exception:
+            pass
+
+    print(f"done ({changed_count} files updated, quickshell will reload configs)")
 
 
-def apply_accent(accent, image=None):
-    dark = dark_variant(accent)
-    print(f"обои: {image}" if image else "обои: не найдены")
-    preview("акцент", accent)
-    preview("editMode", dark)
-    backup((THEME, TOPPANEL, LOCK_CONF))
-    changed = patch(THEME, accent)
-    changed |= patch(TOPPANEL, dark)
-    sync_settings()
-    if os.path.isfile(LOCK_CONF):
-        values = lock_values(accent, image) if image else {
-            k: v for k, v in lock_values(accent, "").items() if k != "bg"}
-        lock_changed = patch_markers(
-            LOCK_CONF, values)
-        print("hyprlock: акцент обновлён" if lock_changed
-              else "hyprlock: без изменений")
-    print("готово (quickshell перезагрузит конфиг сам)" if changed
-          else "тема metro: без изменений")
-
-
-def apply(image, vivid=False):
-    if not os.path.isfile(THEME):
-        raise SystemExit(f"[metro-colors] не найден {THEME}")
-    accent = accent_from_hex(pick_accent(image), vivid)
-    apply_accent(accent, image)
-
-
-def set_accent(hexcol):
-    if not re.fullmatch(r"#?[0-9a-fA-F]{6}", hexcol):
-        raise SystemExit("[metro-colors] формат цвета: #rrggbb")
-    accent = normalize(hexcol if hexcol.startswith("#") else "#" + hexcol,
-                       0.30, 0.55, 0.25)
-    image = current_wallpaper()
-    apply_accent(accent, image)
-
-
-def reset():
-    restore_defaults()
-    sync_settings()
-    print("готово (инстансы quickshell перечитают конфиги сами)")
-
-
-def status():
-    with open(THEME, encoding="utf-8") as f:
-        m = TEAL_RE.search(f.read())
-    preview("текущий", m.group(0).split('"')[1] if m else "?")
-
-
-def status_hex():
-    with open(THEME, encoding="utf-8") as f:
-        m = TEAL_RE.search(f.read())
-    print(m.group(0).split('"')[1] if m else DEFAULT_TEAL)
+def palette(image):
+    theme_name = get_active_theme_id()
+    if theme_name == "material":
+        tokens = extract_tokens_matugen(image_path=image)
+        return [
+            tokens.get("primary", "#8cd5b3"),
+            tokens.get("secondary", "#b3ccbe"),
+            tokens.get("tertiary", "#a5ccdf"),
+            tokens.get("primary_container", "#005139"),
+            tokens.get("surface_container_high", "#252b28"),
+        ]
+    else:
+        cands = []
+        try:
+            acc = extract_vivid_accent(image)
+            if acc:
+                cands.append(acc)
+        except Exception:
+            pass
+        for cand in palette_from_pil(image):
+            if cand not in cands:
+                cands.append(cand)
+            if len(cands) >= 5:
+                break
+        return cands or ["#00aba9", "#0050ef", "#a200ff", "#10893e", "#e51400"]
 
 
 def main():
     ap = argparse.ArgumentParser(prog="metro-colors", add_help=False)
     ap.add_argument("image", nargs="?")
     ap.add_argument("arg2", nargs="?")
+    ap.add_argument("--theme", type=str, default=None)
     ap.add_argument("--vivid", action="store_true")
     ap.add_argument("--reset", action="store_true")
     ap.add_argument("--status", action="store_true")
     ap.add_argument("--status-hex", action="store_true")
+    ap.add_argument("--from-conf", action="store_true")
     a = ap.parse_args()
 
+    if a.from_conf or a.image == "from-conf":
+        # Полная регенерация из metro-shell.conf (зовёт metro-conf apply).
+        # Пин акцента действует только на metro/wp; material всегда строится
+        # от обоев (иначе metro-пин темнит M3-слайдеры и поверхности).
+        cfg = conf()
+        theme_name = cfg.get("theme", "metro").strip() or "metro"
+        acc = cfg.get("accent", "auto").strip()
+        image = current_wallpaper()
+        if theme_name == "material":
+            tokens = extract_tokens_matugen(image_path=image) if image else dict(DEFAULT_TOKENS)
+            apply_theme_colors(tokens, image, theme_name, None)
+        elif acc == "auto" or not acc.startswith("#"):
+            tokens = extract_tokens_matugen(image_path=image) if image else dict(DEFAULT_TOKENS)
+            apply_theme_colors(tokens, image, theme_name, None)
+        else:
+            tokens = extract_tokens_matugen(hex_color=acc)
+            apply_theme_colors(tokens, image, theme_name, acc)
+        return
+
     if a.status_hex or a.image == "status-hex":
-        status_hex()
+        if os.path.isfile(THEME):
+            with open(THEME, encoding="utf-8") as f:
+                m = TEAL_RE.search(f.read())
+            print(m.group(0).split('"')[1] if m else DEFAULT_TOKENS["primary"])
+        else:
+            print(DEFAULT_TOKENS["primary"])
         return
+
     if a.reset or a.image == "reset":
-        reset()
+        restore_defaults()
+        print("done (all quickshell instances reloaded saved defaults)")
         return
+
     if a.image == "save-defaults":
         save_defaults()
         return
+
     if a.status or a.image == "status":
-        status()
+        if os.path.isfile(THEME):
+            with open(THEME, encoding="utf-8") as f:
+                m = TEAL_RE.search(f.read())
+            preview("current", m.group(0).split('"')[1] if m else "?")
         return
+
     if a.image in ("help", "--help"):
         raise SystemExit(__doc__)
 
+    theme_name = a.theme or get_active_theme_id()
+
     if a.image == "set":
         if not a.arg2:
-            raise SystemExit("[metro-colors] укажи цвет: metro-colors set #rrggbb")
-        set_accent(a.arg2)
-        return
-    if a.image == "palette":
-        image = a.arg2
-        if not image:
+            raise SystemExit("[metro-colors] specify color: metro-colors set #rrggbb|auto")
+        if a.arg2 == "auto":
             image = current_wallpaper()
+            tokens = extract_tokens_matugen(image_path=image) if image else dict(DEFAULT_TOKENS)
+            apply_theme_colors(tokens, image, theme_name, "auto")
+            return
+        hexcol = a.arg2 if a.arg2.startswith("#") else "#" + a.arg2
+        tokens = extract_tokens_matugen(hex_color=hexcol)
+        image = current_wallpaper()
+        apply_theme_colors(tokens, image, theme_name, hexcol)
+        return
+
+    if a.image == "palette":
+        image = a.arg2 or current_wallpaper()
         if not image or not os.path.isfile(os.path.expanduser(image)):
-            raise SystemExit("[metro-colors] нет обоев для палитры")
+            raise SystemExit("[metro-colors] no wallpaper for palette")
         cands = palette(os.path.expanduser(image))
-        if not cands:
-            raise SystemExit("[metro-colors] палитра пуста")
         for i, c in enumerate(cands):
             preview(f"#{i + 1}", c)
             print(c)
         return
 
-    image = a.image
-    if not image:
-        image = current_wallpaper()
-        if not image:
-            raise SystemExit("[metro-colors] не нашёл текущие обои "
-                             "— укажи путь: metro-colors <картинка>")
-    if not os.path.isfile(image):
-        raise SystemExit(f"[metro-colors] нет файла: {image}")
-    apply(image, a.vivid)
+    image = a.image or current_wallpaper()
+    if not image or not os.path.isfile(os.path.expanduser(image)):
+        raise SystemExit("[metro-colors] current wallpaper not found — specify path: metro-colors <image>")
+
+    tokens = extract_tokens_matugen(image_path=os.path.expanduser(image))
+    apply_theme_colors(tokens, os.path.expanduser(image), theme_name)
 
 
 if __name__ == "__main__":

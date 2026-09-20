@@ -3,7 +3,8 @@ import Qt5Compat.GraphicalEffects
 import Quickshell
 import Quickshell.Io
 
-// Плитка-фото 2x2: слайдшоу из папки с кроссфейдом, без кликов.
+// Плитка-фото: слайдшоу из папки с кроссфейдом, без кликов.
+// Размер задаёт ячейка сетки через Loader (любой: 1x1 → 3x2).
 // Скругление углов через OpacityMask — clip радиус не обрезает.
 Rectangle {
     id: root
@@ -13,18 +14,18 @@ Rectangle {
     property bool panelShown: false
     property url current: ""
 
-    width: Theme.tileW(2)
-    height: Theme.tileH(2)
     radius: Theme.radius
     color: Theme.glass
     clip: false
 
+    // panelShown больше не нужен снаружи: грузим сразу при создании
+    Component.onCompleted: pick()
     onPanelShownChanged: if (panelShown)
         pick()
 
     Timer {
         interval: root.intervalSec * 1000
-        running: root.panelShown && root.current !== ""
+        running: root.current.toString() !== ""
         repeat: true
         onTriggered: root.pick()
     }
@@ -114,7 +115,7 @@ Rectangle {
 
     Text {
         anchors.centerIn: parent
-        visible: root.current === ""
+        visible: root.current.toString() === ""
         text: "\uf03e"
         font.family: Theme.iconFont
         font.pixelSize: 34

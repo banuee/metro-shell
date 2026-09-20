@@ -2,6 +2,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import Quickshell.Widgets
+import Quickshell.Wayland
 
 PanelBase {
     id: root
@@ -73,7 +74,9 @@ PanelBase {
     Component.onCompleted: pLayoutRead.running = true
 
     function defaultLayout() {
-        const apps = ["firefox", "kitty", "thunar", "spotify-launcher", "org.telegram.desktop", "obsidian", "chromium", "org.kde.kcalc"]
+        // Базовый набор из коробки: виджеты шелла + приложения,
+        // которые ставит установщик везде (firefox, kitty, nemo).
+        const apps = ["firefox", "kitty", "nemo", "metro-settings", "org.kde.kcalc"]
         const l = [{
                 "type": "clock",
                 "w": 2,
@@ -83,15 +86,15 @@ PanelBase {
                 "w": 2,
                 "h": 2
             }, {
-                "type": "photo",
-                "w": 2,
+                "type": "notes",
+                "w": 3,
                 "h": 2
             }]
         for (let i = 0; i < apps.length; i++)
             l.push({
                 "type": "app",
                 "appId": apps[i],
-                "w": 1,
+                "w": 2,
                 "h": 1
             })
         l.push({
@@ -113,15 +116,15 @@ PanelBase {
         }, {
             "type": "ssd",
             "w": 1,
-            "h": 1
+            "h": 2
         }, {
             "type": "power",
             "w": 1,
             "h": 1
         }, {
             "type": "player",
-            "w": 2,
-            "h": 1
+            "w": 3,
+            "h": 2
         })
         return l
     }
@@ -220,7 +223,7 @@ PanelBase {
                 "label": it.label || "",
                 "inTerminal": it.inTerminal !== undefined ? it.inTerminal : true,
                 "iconGlyph": it.iconGlyph || "\uf120",
-                "x": 22 + p.x * step,
+                "x": gridOX + p.x * step,
                 "y": 16 + p.y * step,
                 "w": Theme.tileW(w),
                 "h": Theme.tileH(h)
@@ -244,14 +247,20 @@ PanelBase {
         return r.cells
     }
 
+    // Допустимые размеры плиток. Первый элемент = дефолт для addWidget.
+    // 1x2 — вертикальная, 3x2 — большая горизонтальная.
     function allowedSizes(type) {
-        return type === "weather" ? [[2, 2]] : [[1, 1], [2, 1], [2, 2]]
+        if (type === "weather" || type === "photo")
+            return [[2, 2], [1, 2], [3, 2], [1, 1], [2, 1]]
+        return [[1, 1], [2, 1], [1, 2], [2, 2], [3, 2]]
     }
 
     // ── drag&drop ──
     property int dragIdx: -1
     property point dropTL: Qt.point(0, 0)
     readonly property int step: Theme.unit + Theme.gap
+    // Отступ сетки слева (правее — плотнее к центру, место справа заполняется)
+    readonly property int gridOX: 34
 
     // семантика броска: move — точная ячейка под курсором (свободна или
     // ближайшая свободная), swap — обмен позициями с плиткой равного размера
@@ -261,7 +270,7 @@ PanelBase {
             return null
         const w = it.w || 1
         const h = it.h || 1
-        const gcx = Math.max(0, Math.min(cols - w, Math.round((tlx - 22) / step)))
+        const gcx = Math.max(0, Math.min(cols - w, Math.round((tlx - gridOX) / step)))
         const gry = Math.max(0, Math.round((tly - 16) / step))
         let cur = null
         const list = packed
@@ -328,22 +337,11 @@ PanelBase {
         }
     }
 
-    property string _specKey: ""
-    property var _spec: null
-
     readonly property var dragPreview: {
-        if (dragIdx < 0 || dragIdx >= layout.length) {
-            _specKey = ""
-            _spec = null
+        if (dragIdx < 0 || dragIdx >= layout.length)
             return null
-        }
         const spec = dropSpec(dragIdx, dropTL.x, dropTL.y)
-        const key = spec ? spec.mode + ":" + spec.a + ":" + (spec.b !== undefined ? spec.b : spec.x + "," + spec.y) : "none"
-        if (key !== _specKey) {
-            _specKey = key
-            _spec = spec ? buildPreview(spec) : null
-        }
-        return _spec
+        return spec ? buildPreview(spec) : null
     }
 
     function removeWidget(i) {
@@ -383,8 +381,8 @@ PanelBase {
         const sizes = allowedSizes(type)
         const l = layout.concat([{
                 "type": type,
-                "w": sizes[sizes.length - 1][0],
-                "h": sizes[sizes.length - 1][1]
+                "w": sizes[0][0],
+                "h": sizes[0][1]
             }])
         saveLayout(l)
         layout = l
@@ -456,6 +454,34 @@ PanelBase {
         layout = l
     }
 
+    function resetLayout() {
+        const l = defaultLayout()
+        saveLayout(l)
+        layout = l
+    }
+
+    function compactLayout() {
+        const l = layout.map(it => {
+            const copy = Object.assign({}, it)
+            delete copy.x
+            delete copy.y
+            return copy
+        })
+        const r = packGrid(l)
+        const updated = []
+        for (let i = 0; i < l.length; i++) {
+            const cell = r.cells.find(c => c.i === i)
+            const item = Object.assign({}, l[i])
+            if (cell) {
+                item.x = cell.gx
+                item.y = cell.gy
+            }
+            updated.push(item)
+        }
+        saveLayout(updated)
+        layout = updated
+    }
+
     // write first, then assign: reassigning the layout rebuilds the Repeater
     // and kills the calling delegate mid-handler
     function saveLayout(arr) {
@@ -465,23 +491,46 @@ PanelBase {
     }
 
     function findApp(id) {
+        if (!id)
+            return null
         const values = DesktopEntries.applications.values ?? []
         for (let i = 0; i < values.length; i++) {
-            if (values[i].id === id)
+            if (values[i].id === id || values[i].id === id + ".desktop" || values[i].id + ".desktop" === id)
                 return values[i]
         }
         return null
     }
 
     function ruDate(d) {
-        const days = ["воскресенье", "понедельник", "вторник", "среда", "четверг", "пятница", "суббота"]
-        const months = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря"]
-        return days[d.getDay()] + ", " + d.getDate() + " " + months[d.getMonth()]
+        if (I18n.lang === "ru") {
+            const days = ["воскресенье", "понедельник", "вторник", "среда", "четверг", "пятница", "суббота"]
+            const months = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря"]
+            return days[d.getDay()] + ", " + d.getDate() + " " + months[d.getMonth()]
+        } else {
+            const daysEn = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+            const monthsEn = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
+            return daysEn[d.getDay()] + ", " + monthsEn[d.getMonth()] + " " + d.getDate()
+        }
     }
 
     function ruMonth(d) {
-        const monthsNom = ["январь", "февраль", "март", "апрель", "май", "июнь", "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь"]
-        return monthsNom[d.getMonth()] + " " + d.getFullYear()
+        if (I18n.lang === "ru") {
+            const monthsNom = ["январь", "февраль", "март", "апрель", "май", "июнь", "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь"]
+            return monthsNom[d.getMonth()] + " " + d.getFullYear()
+        } else {
+            const monthsNomEn = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
+            return monthsNomEn[d.getMonth()] + " " + d.getFullYear()
+        }
+    }
+
+    function shortDate(d) {
+        if (I18n.lang === "ru") {
+            const monthsShort = ["янв", "фев", "мар", "апр", "май", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"]
+            return d.getDate() + " " + monthsShort[d.getMonth()]
+        } else {
+            const monthsShortEn = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+            return monthsShortEn[d.getMonth()] + " " + d.getDate()
+        }
     }
 
     onShownChanged: if (!shown) {
@@ -500,7 +549,7 @@ PanelBase {
     Process {
         id: pCpu
 
-        command: ["bash", "-c", "read _ a b c d e f g _ < /proc/stat; t1=$((a+b+c+d+e+f+g)); i1=$((d+e)); sleep 0.6; read _ a b c d e f g _ < /proc/stat; t2=$((a+b+c+d+e+f+g)); i2=$((d+e)); echo $(( 100 * ( (t2-t1) - (i2-i1) ) / (t2-t1) ))"]
+        command: ["bash", "-c", "read _ a b c d e f g _ < /proc/stat; t1=$((a+b+c+d+e+f+g)); i1=$((d+e)); sleep 0.6; read _ a b c d e f g _ < /proc/stat; t2=$((a+b+c+d+e+f+g)); i2=$((d+e)); t=$((t2-t1)); if ((t>0)); then echo $(( 100 * ( (t2-t1) - (i2-i1) ) / t )); else echo 0; fi"]
         stdout: SplitParser {
             onRead: data => root.cpuPct = parseInt(data.trim()) || 0
         }
@@ -525,7 +574,7 @@ PanelBase {
     Process {
         id: pGpu
 
-        command: ["sh", "-c", "nvidia-smi --query-gpu=utilization.gpu,temperature.gpu --format=csv,noheader,nounits 2>/dev/null"]
+        command: ["sh", "-c", "nvidia-smi --query-gpu=utilization.gpu,temperature.gpu --format=csv,noheader,nounits 2>/dev/null || { u=$(cat /sys/class/drm/card*/device/gpu_busy_percent 2>/dev/null | head -n1); t=$(cat /sys/class/drm/card*/device/hwmon/hwmon*/temp1_input 2>/dev/null | head -n1); case $u in '') ;; *) echo $u, $((${t:-0} / 1000));; esac; }"]
         stdout: SplitParser {
             onRead: data => {
                 const f = data.trim().split(",")
@@ -538,7 +587,7 @@ PanelBase {
     Process {
         id: pBat
 
-        command: ["sh", "-c", "b=/sys/class/power_supply/BAT0; echo \"$(cat $b/capacity 2>/dev/null || echo 0)|$(cat $b/status 2>/dev/null)|$(cat $b/energy_now 2>/dev/null || echo 0)|$(cat $b/power_now 2>/dev/null || echo 0)|$(cat $b/energy_full 2>/dev/null || echo 0)\""]
+        command: ["sh", "-c", "b=$(ls -d /sys/class/power_supply/BAT* 2>/dev/null | head -n1); case $b in '') b=/sys/class/power_supply/BAT0;; esac; echo \"$(cat $b/capacity 2>/dev/null || echo 0)|$(cat $b/status 2>/dev/null)|$(cat $b/energy_now 2>/dev/null || echo 0)|$(cat $b/power_now 2>/dev/null || echo 0)|$(cat $b/energy_full 2>/dev/null || echo 0)\""]
         stdout: SplitParser {
             onRead: data => {
                 const f = data.trim().split("|")
@@ -584,7 +633,7 @@ PanelBase {
                 } catch (e) {
                     l = null
                 }
-                if (!l || !l.length || !l[0].type)
+                if (!l || !l[0] || !l[0].type)
                     l = root.defaultLayout()
                 root.layout = l
             }
@@ -595,17 +644,26 @@ PanelBase {
         id: pLayoutWrite
     }
 
+    Process {
+        id: pSettingsDirect
+        command: ["sh", "-c", "export PATH=\"$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH\"; metro-settings"]
+    }
+
+    Process {
+        id: pAppDirect
+    }
+
     Timer {
         interval: 2000
         running: root.shown
         repeat: true
         triggeredOnStart: true
         onTriggered: {
-            pCpu.running = true
-            pRam.running = true
-            pGpu.running = true
-            pBat.running = true
-            pDisk.running = true
+            if (!pCpu.running) pCpu.running = true
+            if (!pRam.running) pRam.running = true
+            if (!pGpu.running) pGpu.running = true
+            if (!pBat.running) pBat.running = true
+            if (!pDisk.running) pDisk.running = true
         }
     }
 
@@ -630,8 +688,8 @@ PanelBase {
             topMargin: -18
         }
         height: (root.expandMode !== "none" || root.pickerOpen || root.execConfigOpen ? 682 : root.shownH) + 18
-        radius: Theme.panelRadius
-        color: Theme.bg
+        radius: Theme.panelTopRadius
+        color: Theme.panelTopBg
         border.width: 1
         border.color: Theme.stroke
 
@@ -816,6 +874,8 @@ PanelBase {
                                 return ssdComp
                             if (t === "exec")
                                 return execComp
+                            if (t === "notes")
+                                return notesComp
                             if (t === "app")
                                 return appComp
                             return emptyComp
@@ -832,6 +892,9 @@ PanelBase {
                                 ld.item.inTerminal = cell.modelData.inTerminal !== undefined ? cell.modelData.inTerminal : true
                             if (ld.item && cell.modelData.type === "exec" && ld.item.hasOwnProperty("iconGlyph"))
                                 ld.item.iconGlyph = cell.modelData.iconGlyph || "\uf120"
+                            // Долгий клик по плитке входит в edit-режим
+                            if (ld.item && ld.item.hasOwnProperty("editRequested"))
+                                ld.item.editRequested.connect(() => root.editMode = true)
                         }
                     }
 
@@ -861,13 +924,6 @@ PanelBase {
                         property: "iconGlyph"
                         value: cell.modelData.iconGlyph || "\uf120"
                         when: ld.status === Loader.Ready && ld.item && cell.modelData.type === "exec" && ld.item.hasOwnProperty("iconGlyph")
-                    }
-
-                    Binding {
-                        target: ld.item
-                        property: "panelShown"
-                        value: root.shown
-                        when: ld.status === Loader.Ready && ld.item && ld.item.hasOwnProperty("panelShown")
                     }
 
                     // рамка выделения в edit-mode
@@ -1076,7 +1132,7 @@ PanelBase {
                                 if (!pressed)
                                     return
                                 const step = Theme.unit + Theme.gap
-                                newW = Math.max(1, Math.min(2, Math.round((cell.width + (mouse.x - startPt.x) + Theme.gap) / step)))
+                                newW = Math.max(1, Math.min(3, Math.round((cell.width + (mouse.x - startPt.x) + Theme.gap) / step)))
                                 newH = Math.max(1, Math.min(2, Math.round((cell.height + (mouse.y - startPt.y) + Theme.gap) / step)))
                                 const allowed = root.allowedSizes(cell.modelData.type)
                                 let ok = false
@@ -1172,7 +1228,7 @@ PanelBase {
                 Text {
                     anchors.left: parent.left
                     anchors.verticalCenter: parent.verticalCenter
-                    text: "Добавить приложение"
+                    text: I18n.t("add_app")
                     font.family: Theme.fontFamily
                     font.pixelSize: 15
                     color: Theme.text
@@ -1228,6 +1284,19 @@ PanelBase {
                     }
                     text: "\uf002"
                     font.family: Theme.iconFont
+                    font.pixelSize: 14
+                    color: Theme.textDim
+                }
+
+                Text {
+                    visible: pickSearch.text === ""
+                    anchors {
+                        left: parent.left
+                        leftMargin: 34
+                        verticalCenter: parent.verticalCenter
+                    }
+                    text: I18n.t("search_apps")
+                    font.family: Theme.fontFamily
                     font.pixelSize: 14
                     color: Theme.textDim
                 }
@@ -1453,7 +1522,7 @@ PanelBase {
 
                     Text {
                         anchors.verticalCenter: parent.verticalCenter
-                        text: root.editExecIdx >= 0 ? "Настройка команды" : "Добавить виджет-команду"
+                        text: root.editExecIdx >= 0 ? I18n.t("edit_cmd") : I18n.t("add_cmd")
                         font.family: Theme.fontFamily
                         font.pixelSize: 15
                         font.weight: Font.DemiBold
@@ -1470,7 +1539,7 @@ PanelBase {
 
                     Text {
                         anchors.verticalCenter: parent.verticalCenter
-                        text: "Шаблоны:"
+                        text: I18n.t("templates")
                         font.family: Theme.fontFamily
                         font.pixelSize: 11
                         color: Theme.textDim
@@ -1479,13 +1548,13 @@ PanelBase {
                     Repeater {
                         model: [
                             {
-                                "label": "Обновление",
-                                "cmd": "cachy-update",
+                                "label": I18n.t("update"),
+                                "cmd": "metro-update",
                                 "term": true,
                                 "ico": "\uf021"
                             },
                             {
-                                "label": "Шелл",
+                                "label": I18n.t("shell"),
                                 "cmd": "killall quickshell; quickshell &",
                                 "term": false,
                                 "ico": "\uf011"
@@ -1503,7 +1572,7 @@ PanelBase {
                                 "ico": "\uf120"
                             },
                             {
-                                "label": "Кэш",
+                                "label": I18n.t("cache"),
                                 "cmd": "rm -rf ~/.cache/*",
                                 "term": false,
                                 "ico": "\uf014"
@@ -1613,7 +1682,7 @@ PanelBase {
                         spacing: 4
 
                         Text {
-                            text: "НАЗВАНИЕ (ОТОБРАЖЕНИЕ В ПЛИТКЕ)"
+                            text: I18n.t("exec_name_label")
                             font.family: Theme.fontFamily
                             font.pixelSize: 10
                             font.weight: Font.DemiBold
@@ -1663,7 +1732,7 @@ PanelBase {
                                     Text {
                                         anchors.fill: parent
                                         visible: !cfgLabelInput.text && !cfgLabelInput.activeFocus
-                                        text: "например: Обновление системы (или пусто для авто)"
+                                        text: I18n.t("exec_name_placeholder")
                                         font.family: Theme.fontFamily
                                         font.pixelSize: 13
                                         color: Qt.rgba(1, 1, 1, 0.25)
@@ -1679,7 +1748,7 @@ PanelBase {
                         spacing: 4
 
                         Text {
-                            text: "КОМАНДА SHELL"
+                            text: I18n.t("exec_cmd_label")
                             font.family: Theme.fontFamily
                             font.pixelSize: 10
                             font.weight: Font.DemiBold
@@ -1730,7 +1799,7 @@ PanelBase {
                                     Text {
                                         anchors.fill: parent
                                         visible: !cfgCmdInput.text && !cfgCmdInput.activeFocus
-                                        text: "например: cachy-update или fastfetch"
+                                        text: I18n.t("exec_cmd_placeholder")
                                         font.family: "monospace"
                                         font.pixelSize: 12
                                         color: Qt.rgba(1, 1, 1, 0.25)
@@ -1746,7 +1815,7 @@ PanelBase {
                         spacing: 4
 
                         Text {
-                            text: "СПОСОБ ВЫПОЛНЕНИЯ"
+                            text: I18n.t("exec_mode_label")
                             font.family: Theme.fontFamily
                             font.pixelSize: 10
                             font.weight: Font.DemiBold
@@ -1795,7 +1864,7 @@ PanelBase {
                                         spacing: 2
 
                                         Text {
-                                            text: "В терминале (kitty)"
+                                            text: I18n.t("exec_term_title")
                                             font.family: Theme.fontFamily
                                             font.pixelSize: 12
                                             font.weight: Font.DemiBold
@@ -1803,7 +1872,7 @@ PanelBase {
                                         }
 
                                         Text {
-                                            text: "Окно с выводом и --hold"
+                                            text: I18n.t("exec_term_desc")
                                             font.family: Theme.fontFamily
                                             font.pixelSize: 10
                                             color: Theme.textDim
@@ -1859,7 +1928,7 @@ PanelBase {
                                         spacing: 2
 
                                         Text {
-                                            text: "В фоне (тихо)"
+                                            text: I18n.t("exec_bg_title")
                                             font.family: Theme.fontFamily
                                             font.pixelSize: 12
                                             font.weight: Font.DemiBold
@@ -1867,7 +1936,7 @@ PanelBase {
                                         }
 
                                         Text {
-                                            text: "Без всплывающего окна"
+                                            text: I18n.t("exec_bg_desc")
                                             font.family: Theme.fontFamily
                                             font.pixelSize: 10
                                             color: Theme.textDim
@@ -1893,7 +1962,7 @@ PanelBase {
                         spacing: 4
 
                         Text {
-                            text: "ИКОНКА (ВЫБОР ИЛИ СВОЙ ГЛИФ)"
+                            text: I18n.t("exec_icon_label")
                             font.family: Theme.fontFamily
                             font.pixelSize: 10
                             font.weight: Font.DemiBold
@@ -1978,7 +2047,7 @@ PanelBase {
 
                         Text {
                             anchors.verticalCenter: parent.verticalCenter
-                            text: "Размер:"
+                            text: I18n.t("size_label")
                             font.family: Theme.fontFamily
                             font.pixelSize: 10
                             color: Theme.textDim
@@ -1997,8 +2066,18 @@ PanelBase {
                                     "h": 1
                                 },
                                 {
+                                    "lbl": "1x2",
+                                    "w": 1,
+                                    "h": 2
+                                },
+                                {
                                     "lbl": "2x2",
                                     "w": 2,
+                                    "h": 2
+                                },
+                                {
+                                    "lbl": "3x2",
+                                    "w": 3,
                                     "h": 2
                                 }
                             ]
@@ -2054,6 +2133,8 @@ PanelBase {
                             anchors.centerIn: parent
                             width: Theme.tileW(root.cfgExecW)
                             height: Theme.tileH(root.cfgExecH)
+                            // 3x2 (268px) шире превью-бокса (220px) — ужимаем целиком
+                            scale: Math.min(1, 200 / Theme.tileW(root.cfgExecW), 160 / Theme.tileH(root.cfgExecH))
 
                             ExecWidget {
                                 anchors.fill: parent
@@ -2095,7 +2176,7 @@ PanelBase {
 
                             Text {
                                 anchors.verticalCenter: parent.verticalCenter
-                                text: root.editExecIdx >= 0 ? "Сохранить" : "Добавить виджет"
+                                text: root.editExecIdx >= 0 ? I18n.t("save") : I18n.t("add_widget")
                                 font.family: Theme.fontFamily
                                 font.pixelSize: 13
                                 font.weight: Font.Bold
@@ -2124,7 +2205,7 @@ PanelBase {
 
                         Text {
                             anchors.centerIn: parent
-                            text: "Отмена"
+                            text: I18n.t("cancel")
                             font.family: Theme.fontFamily
                             font.pixelSize: 12
                             color: Theme.textDim
@@ -2158,6 +2239,8 @@ PanelBase {
         }
         height: root.barH - 14
 
+        // Вход в edit-режим — долгим кликом по любой плитке (см. README.md:
+        // «удерживайте плитку»). Выход — кнопкой «готово» внизу справа.
         Row {
             anchors.left: parent.left
             anchors.verticalCenter: parent.verticalCenter
@@ -2168,62 +2251,67 @@ PanelBase {
                 model: [
                     {
                         "type": "clock",
-                        "label": "часы",
+                        "labelKey": "clock",
                         "glyph": "\uf017"
                     },
                     {
                         "type": "weather",
-                        "label": "погода",
+                        "labelKey": "weather",
                         "glyph": "\uf185"
                     },
                     {
                         "type": "photo",
-                        "label": "фото",
+                        "labelKey": "photo",
                         "glyph": "\uf03e"
                     },
                     {
                         "type": "player",
-                        "label": "плеер",
+                        "labelKey": "player",
                         "glyph": "\uf001"
                     },
                     {
                         "type": "cpu",
-                        "label": "CPU",
+                        "labelKey": "cpu_short",
                         "glyph": "\uf2db"
                     },
                     {
                         "type": "ram",
-                        "label": "RAM",
+                        "labelKey": "ram_short",
                         "glyph": "\ue266"
                     },
                     {
                         "type": "gpu",
-                        "label": "GPU",
+                        "labelKey": "gpu_short",
                         "glyph": "\uf109"
                     },
                     {
                         "type": "bat",
-                        "label": "BAT",
+                        "labelKey": "bat_short",
                         "glyph": "\uf240"
                     },
                     {
                         "type": "ssd",
-                        "label": "SSD",
+                        "labelKey": "ssd_short",
                         "glyph": "\uf0c7"
                     },
                     {
                         "type": "power",
-                        "label": "питание",
+                        "labelKey": "power",
                         "glyph": "\uf011"
                     },
                     {
                         "type": "exec",
-                        "label": "команда",
+                        "labelKey": "command",
                         "glyph": "\uf120"
                     },
                     {
+                        "type": "notes",
+                        "labelKey": "notes",
+                        "glyph": "\uf249"
+                    },
+                    {
                         "type": "app",
-                        "label": "приложение",
+                        "labelKey": "app",
                         "glyph": "\uf00a"
                     }
                 ]
@@ -2235,7 +2323,7 @@ PanelBase {
 
                     width: chipLabel.width + 34
                     height: 30
-                    radius: 15
+                    radius: Theme.isWP ? 0 : 15
                     color: chipMa.containsMouse ? Theme.glassHover : Theme.glass
                     border.width: 1
                     border.color: Theme.stroke
@@ -2256,7 +2344,7 @@ PanelBase {
                             id: chipLabel
 
                             anchors.verticalCenter: parent.verticalCenter
-                            text: chip.modelData.label
+                            text: I18n.t(chip.modelData.labelKey)
                             font.family: Theme.fontFamily
                             font.pixelSize: 12
                             color: Theme.text
@@ -2284,45 +2372,140 @@ PanelBase {
                 }
             }
         }
+
+        Row {
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: 8
+            visible: root.editMode
+
+            // «Готово» — выход из edit-режима
+            Rectangle {
+                width: doneLabel.width + 30
+                height: 30
+                radius: Theme.isWP ? 0 : 15
+                color: doneMa.containsMouse ? Theme.alpha(Theme.accent, 0.95) : Theme.alpha(Theme.accent, 0.8)
+                border.width: 1
+                border.color: Theme.accent
+                scale: doneMa.pressed ? 0.94 : (doneMa.containsMouse ? 1.04 : 1.0)
+
+                Behavior on color { ColorAnimation { duration: 120 } }
+                Behavior on scale { NumberAnimation { duration: 110; easing.type: Easing.OutQuad } }
+
+                Row {
+                    anchors.centerIn: parent
+                    spacing: 6
+
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "\uf00c"
+                        font.family: Theme.iconFont
+                        font.pixelSize: 11
+                        color: "#ffffff"
+                    }
+
+                    Text {
+                        id: doneLabel
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: I18n.t("done")
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 12
+                        font.weight: Font.DemiBold
+                        color: "#ffffff"
+                    }
+                }
+
+                MouseArea {
+                    id: doneMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.editMode = false
+                }
+            }
+
+            Rectangle {
+                width: compactLabel.width + 30
+                height: 30
+                radius: Theme.isWP ? 0 : 15
+                color: compactMa.containsMouse ? Theme.glassHover : Theme.glass
+                border.width: 1
+                border.color: Theme.stroke
+
+                Row {
+                    anchors.centerIn: parent
+                    spacing: 6
+
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "\uf0c9"
+                        font.family: Theme.iconFont
+                        font.pixelSize: 11
+                        color: Theme.accent
+                    }
+
+                    Text {
+                        id: compactLabel
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: I18n.t("compact")
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 12
+                        color: Theme.text
+                    }
+                }
+
+                MouseArea {
+                    id: compactMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.compactLayout()
+                }
+            }
+
+            Rectangle {
+                width: resetLabel.width + 30
+                height: 30
+                radius: Theme.isWP ? 0 : 15
+                color: resetMa.containsMouse ? Theme.alpha(Theme.red, 0.25) : Theme.glass
+                border.width: 1
+                border.color: Theme.stroke
+
+                Row {
+                    anchors.centerIn: parent
+                    spacing: 6
+
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "\uf0e2"
+                        font.family: Theme.iconFont
+                        font.pixelSize: 11
+                        color: Theme.red
+                    }
+
+                    Text {
+                        id: resetLabel
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: I18n.t("reset")
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 12
+                        color: Theme.text
+                    }
+                }
+
+                MouseArea {
+                    id: resetMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.resetLayout()
+                }
+            }
+        }
     }
 
-    // вертикальная кнопка «изменить/готово» в правом верхнем углу панели
-    Rectangle {
-        id: editBtn
-
-        anchors {
-            top: parent.top
-            right: parent.right
-            topMargin: 15
-            rightMargin: 15
-        }
-        width: 40
-        height: editLabel.width + 30
-        radius: 30
-        color: root.editMode ? Theme.alpha(Theme.accent, 0.85) : editMa.containsMouse ? Theme.glassHover : Theme.glass
-        border.width: 2
-        border.color: Theme.stroke
-
-        Text {
-            id: editLabel
-
-            anchors.centerIn: parent
-            rotation: 0
-            text: root.editMode ? "\uf00c" : "\uf044"
-            font.family: Theme.fontFamily
-            font.pixelSize: 12
-            color: root.editMode ? "#0e1720" : Theme.text
-        }
-
-        MouseArea {
-            id: editMa
-
-            anchors.fill: parent
-            hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
-            onClicked: root.editMode = !root.editMode
-        }
-    }
+    // Вход в edit-режим — долгим кликом по любой плитке (TileFrame.editRequested).
+    // Выход — кнопкой «готово» в нижней панели рядом с «уплотнить»/«сброс».
 
     // ── фабрики виджетов ──
     Component {
@@ -2417,284 +2600,435 @@ PanelBase {
         }
     }
 
+    Component {
+        id: notesComp
+
+        NotesWidget {
+        }
+    }
+
     component SysW: TileFrame {
         id: sys
 
-        required property string kind
-        readonly property bool isWide: width >= 120
-        readonly property bool isTall: height >= 120
+        property string kind: "cpu"
 
-        readonly property real val: kind === "cpu" ? root.cpuPct / 100 : kind === "ram" ? root.ramPct / 100 : kind === "gpu" ? root.gpuPct / 100 : kind === "bat" ? root.batPct / 100 : root.diskPct / 100
+        readonly property bool isWide: width > Theme.unit + 20
+        readonly property bool isTall: height > Theme.unit + 20
+        // 3-колоночная ширина (3x2): 2x2-раскладки тянутся сами (fluid width)
+        readonly property bool isXL: width > Theme.tileW(2) + 20
 
-        readonly property string iconGlyph: {
-            if (kind === "cpu")
-                return "\uf2db"
-            if (kind === "ram")
-                return "\ue266"
-            if (kind === "gpu")
-                return "\uf108"
-            if (kind === "bat") {
-                if (root.batCharging)
-                    return "\uf0e7"
-                if (val > 0.85)
-                    return "\uf240"
-                if (val > 0.60)
-                    return "\uf241"
-                if (val > 0.35)
-                    return "\uf242"
-                if (val > 0.15)
-                    return "\uf243"
-                return "\uf244"
-            }
-            return "\uf0c7"
-        }
-
-        readonly property string shortTitle: kind === "cpu" ? "ЦП" : kind === "ram" ? "ОЗУ" : kind === "gpu" ? "GPU" : kind === "bat" ? "АКБ" : "SSD"
-        readonly property string longTitle: kind === "cpu" ? "Процессор" : kind === "ram" ? "Память" : kind === "gpu" ? "Графика" : kind === "bat" ? "Батарея" : "Диск"
-
-        readonly property string subTxt: {
-            if (kind === "gpu")
-                return root.gpuTemp > 0 ? (root.gpuTemp + "°C") : ""
-            if (kind === "bat") {
-                if (root.batCharging)
-                    return "Зарядка"
-                if (root.batStatus === "Full")
-                    return "100%"
-                if (root.batTime !== "")
-                    return root.batTime
-                return ""
-            }
-            if (kind === "ssd")
-                return root.diskFree > 0 ? (root.diskFree + "G") : ""
-            if (kind === "ram")
-                return root.ramUsed !== "" ? (root.ramUsed + " / " + root.ramTotal + " GB") : ""
-            return root.cpuPct > 70 ? "Нагрузка" : "Норма"
-        }
-
-        readonly property color fillCol: {
-            if (kind === "cpu")
-                return root.cpuPct > 80 ? Theme.red : root.cpuPct > 50 ? Theme.orange : Theme.accent
-            if (kind === "ram")
-                return root.ramPct > 85 ? Theme.red : root.ramPct > 60 ? Theme.orange : Theme.teal
-            if (kind === "gpu")
-                return root.gpuPct > 80 ? Theme.red : root.gpuPct > 50 ? Theme.orange : Theme.purple
-            if (kind === "bat")
-                return root.batCharging ? Theme.lime : (root.batPct < 15 ? Theme.red : root.batPct < 30 ? Theme.orange : Theme.lime)
-            return root.diskPct > 90 ? Theme.red : root.diskPct > 75 ? Theme.orange : Theme.teal
+        readonly property real val: {
+            if (kind === "cpu") return root.cpuPct / 100.0
+            if (kind === "ram") return root.ramPct / 100.0
+            if (kind === "gpu") return root.gpuPct / 100.0
+            if (kind === "bat") return root.batPct / 100.0
+            return root.diskPct / 100.0
         }
 
         property real dispValue: val
-        property color dispColor: fillCol
 
-        Behavior on dispValue {
-            NumberAnimation {
-                duration: 700
-                easing.type: Easing.OutCubic
-            }
+        // Все виджеты — в цвете акцента; красный только для критического заряда
+        readonly property color dispColor: {
+            if (kind === "bat" && !root.batCharging && root.batPct <= 20) return Theme.red
+            return Theme.accent
         }
 
-        Behavior on dispColor {
-            ColorAnimation {
-                duration: 400
-            }
+        readonly property string iconGlyph: {
+            if (kind === "cpu") return "\uf2db"
+            if (kind === "ram") return "\ue266"
+            if (kind === "gpu") return "\uf108"
+            if (kind === "bat") return root.batCharging ? "\uf0e7" : (root.batPct <= 20 ? "\uf244" : "\uf240")
+            if (kind === "ssd") return "\uf0c7"
+            return "\uf2db"
         }
 
-        // Мягкий акцентный градиент в нижней части плитки
-        Rectangle {
-            anchors.fill: parent
-            radius: parent.radius
-            opacity: 0.16
-            gradient: Gradient {
-                GradientStop {
-                    position: 0.0
-                    color: "transparent"
-                }
-
-                GradientStop {
-                    position: 1.0
-                    color: Theme.alpha(sys.dispColor, 0.5)
-                }
-            }
+        readonly property string shortTitle: {
+            if (kind === "cpu") return "CPU"
+            if (kind === "ram") return "RAM"
+            if (kind === "gpu") return "GPU"
+            if (kind === "bat") return I18n.t("battery")
+            if (kind === "ssd") return "SSD"
+            return ""
         }
 
-        // ── 1x1 Компактный вид ──
+        readonly property string longTitle: {
+            if (kind === "cpu") return I18n.t("processor")
+            if (kind === "ram") return I18n.t("memory")
+            if (kind === "gpu") return I18n.t("graphics")
+            if (kind === "bat") return I18n.t("battery")
+            if (kind === "ssd") return I18n.t("ssd_long")
+            return ""
+        }
+
+        readonly property string subTxt: {
+            if (kind === "cpu") return root.cpuPct + "%"
+            if (kind === "ram") return root.ramTotal !== "" ? (root.ramUsed + " / " + root.ramTotal + " GB") : ""
+            if (kind === "gpu") return root.gpuTemp > 0 ? (root.gpuTemp + "°C") : ""
+            if (kind === "bat") return root.batStatus !== "" ? (root.batCharging ? I18n.t("charging_state") : root.batStatus) : (root.batTime !== "" ? root.batTime : "")
+            if (kind === "ssd") return root.diskFree + " GB"
+            return ""
+        }
+
+        // =====================================================================
+        //  МАТЕРИАЛЬНЫЙ ВИД (Theme.isMaterial == true)
+        // =====================================================================
         Item {
             anchors.fill: parent
-            anchors.margins: 8
-            visible: !sys.isWide && !sys.isTall
+            visible: Theme.isMaterial
 
-            // Верхний ряд: Иконка + Мини-бейдж (темп/зарядка)
+            // 1x1
             Item {
-                anchors {
-                    left: parent.left
-                    right: parent.right
-                    top: parent.top
-                }
-                height: 18
+                anchors.fill: parent
+                anchors.margins: 8
+                visible: !sys.isWide && !sys.isTall
 
-                Text {
+                Item {
                     anchors.left: parent.left
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: sys.iconGlyph
-                    font.family: Theme.iconFont
-                    font.pixelSize: 13
-                    color: sys.dispColor
-                }
-
-                Text {
-                    anchors {
-                        right: parent.right
-                        verticalCenter: parent.verticalCenter
-                    }
-                    text: sys.kind === "gpu" && root.gpuTemp > 0 ? (root.gpuTemp + "°") : (sys.kind === "bat" && root.batCharging ? "\uf0e7" : (sys.kind === "bat" ? root.batTime : ""))
-                    font.family: sys.kind === "bat" && root.batCharging ? Theme.iconFont : Theme.fontFamily
-                    font.pixelSize: 9
-                    font.weight: Font.DemiBold
-                    color: sys.kind === "bat" && root.batCharging ? Theme.lime : Theme.textDim
-                }
-            }
-
-            // Центр: Чёткое число процентов
-            Text {
-                anchors.centerIn: parent
-                anchors.verticalCenterOffset: -2
-                text: Math.round(sys.dispValue * 100) + "%"
-                font.family: Theme.fontFamily
-                font.pixelSize: 22
-                font.weight: Font.Light
-                color: Theme.text
-            }
-
-            // Низ: Название + Аккуратная полоска трекера
-            Column {
-                anchors {
-                    left: parent.left
-                    right: parent.right
-                    bottom: parent.bottom
-                }
-                spacing: 3
-
-                Text {
-                    text: sys.shortTitle
-                    font.family: Theme.fontFamily
-                    font.pixelSize: 10
-                    color: Theme.textDim
-                    elide: Text.ElideRight
-                }
-
-                Rectangle {
-                    width: parent.width
-                    height: 3
-                    radius: 1.5
-                    color: Qt.rgba(255, 255, 255, 0.08)
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    height: 24
 
                     Rectangle {
-                        width: Math.max(3, parent.width * Math.min(1, Math.max(0, sys.dispValue)))
-                        height: parent.height
-                        radius: 1.5
-                        color: sys.dispColor
-
-                        Behavior on width {
-                            NumberAnimation {
-                                duration: 500
-                                easing.type: Easing.OutCubic
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // ── 2x1 Широкий вид ──
-        Item {
-            anchors.fill: parent
-            anchors.margins: 12
-            visible: sys.isWide && !sys.isTall
-
-            Row {
-                anchors.fill: parent
-                spacing: 12
-
-                // Иконка в акриловой плашке
-                Rectangle {
-                    anchors.verticalCenter: parent.verticalCenter
-                    width: 44
-                    height: 44
-                    radius: Theme.radiusSmall
-                    color: Theme.glass
-                    border.width: 1
-                    border.color: Theme.stroke
-
-                    Text {
-                        anchors.centerIn: parent
-                        text: sys.iconGlyph
-                        font.family: Theme.iconFont
-                        font.pixelSize: 20
-                        color: sys.dispColor
-                    }
-                }
-
-                // Инфо-колонка
-                Column {
-                    anchors.verticalCenter: parent.verticalCenter
-                    width: parent.width - 44 - 12
-                    spacing: 3
-
-                    Item {
-                        width: parent.width
-                        height: 16
+                        width: 24
+                        height: 24
+                        radius: 12
+                        color: Theme.primary_container
 
                         Text {
-                            anchors.left: parent.left
-                            anchors.right: statusSubTxt.left
-                            anchors.rightMargin: 6
-                            anchors.verticalCenter: parent.verticalCenter
-                            text: sys.shortTitle === "АКБ" ? "Батарея" : (sys.shortTitle === "ЦП" ? "Процессор" : (sys.shortTitle === "ОЗУ" ? "Память" : sys.longTitle))
-                            font.family: Theme.fontFamily
-                            font.pixelSize: 12
-                            font.weight: Font.Normal
-                            color: Theme.textDim
-                            elide: Text.ElideRight
-                        }
-
-                        Text {
-                            id: statusSubTxt
-
-                            anchors.right: parent.right
-                            anchors.verticalCenter: parent.verticalCenter
-                            text: sys.subTxt
-                            font.family: Theme.fontFamily
+                            anchors.centerIn: parent
+                            text: sys.iconGlyph
+                            font.family: Theme.iconFont
                             font.pixelSize: 11
-                            font.weight: Font.DemiBold
-                            color: sys.kind === "bat" && root.batCharging ? Theme.lime : Theme.textDim
+                            color: Theme.on_primary_container
                         }
                     }
 
                     Text {
-                        text: Math.round(sys.dispValue * 100) + "%"
-                        font.family: Theme.fontFamily
-                        font.pixelSize: 24
-                        font.weight: Font.Light
-                        color: Theme.text
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: sys.kind === "gpu" && root.gpuTemp > 0 ? (root.gpuTemp + "°") : (sys.kind === "bat" && root.batCharging ? "\uf0e7" : (sys.kind === "bat" ? root.batTime : ""))
+                        font.family: sys.kind === "bat" && root.batCharging ? Theme.iconFont : Theme.fontFamily
+                        font.pixelSize: 10
+                        font.weight: Font.Medium
+                        color: sys.kind === "bat" && root.batCharging ? Theme.primary : Theme.on_surface_variant
                     }
+                }
+
+                Text {
+                    anchors.centerIn: parent
+                    anchors.verticalCenterOffset: 2
+                    text: Math.round(sys.dispValue * 100) + "%"
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 20
+                    font.weight: Font.Medium
+                    color: Theme.on_surface
+                }
+
+                Column {
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.bottom: parent.bottom
+                    spacing: 3
 
                     Rectangle {
                         width: parent.width
                         height: 4
                         radius: 2
-                        color: Qt.rgba(255, 255, 255, 0.08)
+                        color: Theme.surface_container_highest
 
                         Rectangle {
                             width: Math.max(4, parent.width * Math.min(1, Math.max(0, sys.dispValue)))
                             height: parent.height
                             radius: 2
                             color: sys.dispColor
+                        }
+                    }
+                }
+            }
 
-                            Behavior on width {
-                                NumberAnimation {
-                                    duration: 500
-                                    easing.type: Easing.OutCubic
-                                }
+            // 1x2 вертикальная (material)
+            Item {
+                anchors.fill: parent
+                anchors.margins: 8
+                visible: !sys.isWide && sys.isTall
+
+                Item {
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    height: 16
+
+                    Text {
+                        anchors.left: parent.left
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: sys.iconGlyph
+                        font.family: Theme.iconFont
+                        font.pixelSize: 12
+                        color: Theme.on_primary_container
+                    }
+
+                    Text {
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: sys.kind === "gpu" && root.gpuTemp > 0 ? (root.gpuTemp + "°") : (sys.kind === "bat" && root.batCharging ? "\uf0e7" : (sys.kind === "bat" ? root.batTime : ""))
+                        font.family: sys.kind === "bat" && root.batCharging ? Theme.iconFont : Theme.fontFamily
+                        font.pixelSize: 10
+                        font.weight: Font.Medium
+                        color: sys.kind === "bat" && root.batCharging ? Theme.primary : Theme.on_surface_variant
+                    }
+                }
+
+                Text {
+                    anchors.centerIn: parent
+                    anchors.verticalCenterOffset: -10
+                    text: Math.round(sys.dispValue * 100) + "%"
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 24
+                    font.weight: Font.Medium
+                    color: Theme.on_surface
+                }
+
+                Column {
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.bottom: parent.bottom
+                    spacing: 3
+
+                    Text {
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        visible: sys.kind !== "cpu" && sys.subTxt !== ""
+                        text: sys.subTxt
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 10
+                        color: Theme.on_surface_variant
+                        elide: Text.ElideRight
+                        width: parent.width
+                        horizontalAlignment: Text.AlignHCenter
+                    }
+
+                    Text {
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        text: sys.shortTitle
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 10
+                        font.weight: Font.Medium
+                        color: Theme.on_surface_variant
+                    }
+
+                    Rectangle {
+                        width: parent.width
+                        height: 4
+                        radius: 2
+                        color: Theme.surface_container_highest
+
+                        Rectangle {
+                            width: Math.max(4, parent.width * Math.min(1, Math.max(0, sys.dispValue)))
+                            height: parent.height
+                            radius: 2
+                            color: sys.dispColor
+                        }
+                    }
+                }
+            }
+
+            // 2x1
+            Item {
+                anchors.fill: parent
+                anchors.margins: 12
+                visible: sys.isWide && !sys.isTall
+
+                Row {
+                    anchors.fill: parent
+                    spacing: 12
+
+                    Rectangle {
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 44
+                        height: 44
+                        radius: 16
+                        color: Theme.primary_container
+
+                        Text {
+                            anchors.centerIn: parent
+                            text: sys.iconGlyph
+                            font.family: Theme.iconFont
+                            font.pixelSize: 18
+                            color: Theme.on_primary_container
+                        }
+                    }
+
+                    Column {
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: parent.width - 44 - 12
+                        spacing: 3
+
+                        Item {
+                            width: parent.width
+                            height: 16
+
+                            Text {
+                                anchors.left: parent.left
+                                anchors.right: matStatusSubTxt.left
+                                anchors.rightMargin: 6
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: sys.longTitle
+                                font.family: Theme.fontFamily
+                                font.pixelSize: 12
+                                font.weight: Font.Medium
+                                color: Theme.on_surface_variant
+                                elide: Text.ElideRight
+                            }
+
+                            Text {
+                                id: matStatusSubTxt
+                                anchors.right: parent.right
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: sys.subTxt
+                                font.family: Theme.fontFamily
+                                font.pixelSize: 11
+                                font.weight: Font.Medium
+                                color: sys.kind === "bat" && root.batCharging ? Theme.primary : Theme.on_surface_variant
+                            }
+                        }
+
+                        Text {
+                            text: Math.round(sys.dispValue * 100) + "%"
+                            font.family: Theme.fontFamily
+                            font.pixelSize: 22
+                            font.weight: Font.Medium
+                            color: Theme.on_surface
+                        }
+
+                        Rectangle {
+                            width: parent.width
+                            height: 5
+                            radius: 2.5
+                            color: Theme.surface_container_highest
+
+                            Rectangle {
+                                width: Math.max(5, parent.width * Math.min(1, Math.max(0, sys.dispValue)))
+                                height: parent.height
+                                radius: 2.5
+                                color: sys.dispColor
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 2x2
+            Item {
+                anchors.fill: parent
+                anchors.margins: 14
+                visible: sys.isWide && sys.isTall
+
+                Column {
+                    anchors.fill: parent
+                    spacing: 8
+
+                    Row {
+                        width: parent.width
+                        height: 38
+                        spacing: 10
+
+                        Rectangle {
+                            width: 38
+                            height: 38
+                            radius: 14
+                            color: Theme.primary_container
+
+                            Text {
+                                anchors.centerIn: parent
+                                text: sys.iconGlyph
+                                font.family: Theme.iconFont
+                                font.pixelSize: 18
+                                color: Theme.on_primary_container
+                            }
+                        }
+
+                        Column {
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: parent.width - 48
+                            spacing: 2
+
+                            Text {
+                                text: sys.longTitle
+                                font.family: Theme.fontFamily
+                                font.pixelSize: 13
+                                font.weight: Font.DemiBold
+                                color: Theme.on_surface
+                            }
+
+                            Text {
+                                text: sys.kind === "bat" ? (root.batCharging ? "Заряжается" : "От батареи") : (sys.subTxt || "Система")
+                                font.family: Theme.fontFamily
+                                font.pixelSize: 11
+                                color: Theme.on_surface_variant
+                            }
+                        }
+                    }
+
+                    Row {
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        spacing: 2
+
+                        Text {
+                            text: Math.round(sys.dispValue * 100)
+                            font.family: Theme.fontFamily
+                            font.pixelSize: 48
+                            font.weight: Font.Normal
+                            color: Theme.primary
+                        }
+
+                        Text {
+                            anchors.bottom: parent.bottom
+                            anchors.bottomMargin: 8
+                            text: "%"
+                            font.family: Theme.fontFamily
+                            font.pixelSize: 20
+                            font.weight: Font.Medium
+                            color: Theme.on_surface_variant
+                        }
+                    }
+
+                    Column {
+                        width: parent.width
+                        spacing: 4
+
+                        Rectangle {
+                            width: parent.width
+                            height: 8
+                            radius: 4
+                            color: Theme.surface_container_highest
+
+                            Rectangle {
+                                width: Math.max(8, parent.width * Math.min(1, Math.max(0, sys.dispValue)))
+                                height: parent.height
+                                radius: 4
+                                color: sys.dispColor
+                            }
+                        }
+
+                        Item {
+                            width: parent.width
+                            height: 14
+
+                            Text {
+                                anchors.left: parent.left
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: "0%"
+                                font.family: Theme.fontFamily
+                                font.pixelSize: 10
+                                color: Theme.on_surface_variant
+                            }
+
+                            Text {
+                                anchors.right: parent.right
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: sys.kind === "ram" && root.ramTotal !== "" ? (root.ramUsed + " / " + root.ramTotal + " GB") : "100%"
+                                font.family: Theme.fontFamily
+                                font.pixelSize: 10
+                                color: Theme.on_surface_variant
                             }
                         }
                     }
@@ -2702,138 +3036,374 @@ PanelBase {
             }
         }
 
-        // ── 2x2 Большой вид ──
+        // =====================================================================
+        //  КЛАССИЧЕСКИЙ METRO / WP ВИД (Theme.isMaterial == false)
+        // =====================================================================
         Item {
             anchors.fill: parent
-            anchors.margins: 14
-            visible: sys.isWide && sys.isTall
+            visible: !Theme.isMaterial
 
-            Column {
-                width: parent.width
-                spacing: 10
+            // 1x1
+            Item {
+                anchors.fill: parent
+                anchors.margins: 8
+                visible: !sys.isWide && !sys.isTall
 
-                // Верхний ряд
-                Row {
-                    width: parent.width
-                    height: 46
+                Item {
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    height: 16
+
+                    Text {
+                        anchors.left: parent.left
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: sys.iconGlyph
+                        font.family: Theme.iconFont
+                        font.pixelSize: 13
+                        color: sys.dispColor
+                    }
+
+                    Text {
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: sys.kind === "gpu" && root.gpuTemp > 0 ? (root.gpuTemp + "°") : (sys.kind === "bat" && root.batCharging ? "\uf0e7" : (sys.kind === "bat" ? root.batTime : ""))
+                        font.family: sys.kind === "bat" && root.batCharging ? Theme.iconFont : Theme.fontFamily
+                        font.pixelSize: 9
+                        font.weight: Font.DemiBold
+                        color: sys.kind === "bat" && root.batCharging ? Theme.accent : Theme.textDim
+                    }
+                }
+
+                Text {
+                    anchors.centerIn: parent
+                    anchors.verticalCenterOffset: -2
+                    text: Math.round(sys.dispValue * 100) + "%"
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 22
+                    font.weight: Font.Light
+                    color: Theme.text
+                }
+
+                Column {
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.bottom: parent.bottom
+                    spacing: 3
+
+                    Text {
+                        text: sys.shortTitle
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 10
+                        color: Theme.textDim
+                        elide: Text.ElideRight
+                    }
 
                     Rectangle {
-                        width: 46
-                        height: 46
+                        width: parent.width
+                        height: 3
+                        radius: Theme.isWP ? 0 : 1.5
+                        color: Theme.alpha(sys.dispColor, 0.16)
+
+                        Rectangle {
+                            width: Math.max(3, parent.width * Math.min(1, Math.max(0, sys.dispValue)))
+                            height: parent.height
+                            radius: Theme.isWP ? 0 : 1.5
+                            color: sys.dispColor
+                        }
+                    }
+                }
+            }
+
+            // 1x2 вертикальная (metro)
+            Item {
+                anchors.fill: parent
+                anchors.margins: 8
+                visible: !sys.isWide && sys.isTall
+
+                Item {
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    height: 16
+
+                    Text {
+                        anchors.left: parent.left
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: sys.iconGlyph
+                        font.family: Theme.iconFont
+                        font.pixelSize: 13
+                        color: sys.dispColor
+                    }
+
+                    Text {
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: sys.kind === "gpu" && root.gpuTemp > 0 ? (root.gpuTemp + "°") : (sys.kind === "bat" && root.batCharging ? "\uf0e7" : (sys.kind === "bat" ? root.batTime : ""))
+                        font.family: sys.kind === "bat" && root.batCharging ? Theme.iconFont : Theme.fontFamily
+                        font.pixelSize: 9
+                        font.weight: Font.DemiBold
+                        color: sys.kind === "bat" && root.batCharging ? Theme.accent : Theme.textDim
+                    }
+                }
+
+                Text {
+                    anchors.centerIn: parent
+                    anchors.verticalCenterOffset: -10
+                    text: Math.round(sys.dispValue * 100) + "%"
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 24
+                    font.weight: Font.Light
+                    color: Theme.text
+                }
+
+                Column {
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.bottom: parent.bottom
+                    spacing: 3
+
+                    Text {
+                        visible: sys.kind !== "cpu" && sys.subTxt !== ""
+                        width: parent.width
+                        text: sys.subTxt
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 10
+                        color: Theme.textDim
+                        elide: Text.ElideRight
+                        horizontalAlignment: Text.AlignHCenter
+                    }
+
+                    Text {
+                        text: sys.shortTitle
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 10
+                        color: Theme.textDim
+                        elide: Text.ElideRight
+                    }
+
+                    Rectangle {
+                        width: parent.width
+                        height: 3
+                        radius: Theme.isWP ? 0 : 1.5
+                        color: Theme.alpha(sys.dispColor, 0.16)
+
+                        Rectangle {
+                            width: Math.max(3, parent.width * Math.min(1, Math.max(0, sys.dispValue)))
+                            height: parent.height
+                            radius: Theme.isWP ? 0 : 1.5
+                            color: sys.dispColor
+                        }
+                    }
+                }
+            }
+
+            // 2x1
+            Item {
+                anchors.fill: parent
+                anchors.margins: 12
+                visible: sys.isWide && !sys.isTall
+
+                Row {
+                    anchors.fill: parent
+                    spacing: 12
+
+                    Rectangle {
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 44
+                        height: 44
                         radius: Theme.radiusSmall
                         color: Theme.glass
-                        border.width: 1
+                        border.width: Theme.isWP ? 0 : 1
                         border.color: Theme.stroke
 
                         Text {
                             anchors.centerIn: parent
                             text: sys.iconGlyph
                             font.family: Theme.iconFont
-                            font.pixelSize: 22
+                            font.pixelSize: 20
                             color: sys.dispColor
                         }
                     }
 
-                    Item {
-                        width: parent.width - 46
-                        height: parent.height
+                    Column {
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: parent.width - 44 - 12
+                        spacing: 3
 
-                        Column {
-                            anchors {
-                                left: parent.left
-                                leftMargin: 10
-                                verticalCenter: parent.verticalCenter
-                            }
-                            spacing: 2
+                        Item {
+                            width: parent.width
+                            height: 16
 
                             Text {
+                                anchors.left: parent.left
+                                anchors.right: metroStatusSubTxt.left
+                                anchors.rightMargin: 6
+                                anchors.verticalCenter: parent.verticalCenter
                                 text: sys.longTitle
                                 font.family: Theme.fontFamily
-                                font.pixelSize: 14
-                                font.weight: Font.DemiBold
-                                color: Theme.text
+                                font.pixelSize: 12
+                                font.weight: Font.Normal
+                                color: Theme.textDim
+                                elide: Text.ElideRight
                             }
 
                             Text {
-                                text: sys.kind === "bat" ? (root.batCharging ? "Заряжается" : (root.batStatus === "Full" ? "Полный заряд" : (root.batTime !== "" ? ("Осталось ~" + root.batTime) : "Разряжается"))) : (sys.subTxt !== "" ? sys.subTxt : (Math.round(sys.dispValue * 100) + "% нагрузка"))
+                                id: metroStatusSubTxt
+                                anchors.right: parent.right
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: sys.subTxt
                                 font.family: Theme.fontFamily
                                 font.pixelSize: 11
-                                color: sys.kind === "bat" && root.batCharging ? Theme.lime : Theme.textDim
+                                font.weight: Font.DemiBold
+                                color: sys.kind === "bat" && root.batCharging ? Theme.accent : Theme.textDim
+                            }
+                        }
+
+                        Text {
+                            text: Math.round(sys.dispValue * 100) + "%"
+                            font.family: Theme.fontFamily
+                            font.pixelSize: 24
+                            font.weight: Font.Light
+                            color: Theme.text
+                        }
+
+                        Rectangle {
+                            width: parent.width
+                            height: 4
+                            radius: Theme.isWP ? 0 : 2
+                            color: Theme.alpha(sys.dispColor, 0.16)
+
+                            Rectangle {
+                                width: Math.max(4, parent.width * Math.min(1, Math.max(0, sys.dispValue)))
+                                height: parent.height
+                                radius: Theme.isWP ? 0 : 2
+                                color: sys.dispColor
                             }
                         }
                     }
                 }
+            }
 
-                // Центральный процент
-                Row {
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    spacing: 3
+            // 2x2
+            Item {
+                anchors.fill: parent
+                anchors.margins: 14
+                visible: sys.isWide && sys.isTall
 
-                    Text {
-                        text: Math.round(sys.dispValue * 100)
-                        font.family: Theme.fontFamily
-                        font.pixelSize: 46
-                        font.weight: Font.Light
-                        color: Theme.text
-                    }
-
-                    Text {
-                        anchors.bottom: parent.bottom
-                        anchors.bottomMargin: 8
-                        text: "%"
-                        font.family: Theme.fontFamily
-                        font.pixelSize: 18
-                        font.weight: Font.Light
-                        color: Theme.textDim
-                    }
-                }
-
-                // Нижний прогресс бар и подписи
                 Column {
                     width: parent.width
-                    spacing: 4
+                    spacing: 10
 
-                    Rectangle {
+                    Row {
                         width: parent.width
-                        height: 6
-                        radius: 3
-                        color: Qt.rgba(255, 255, 255, 0.08)
+                        height: 46
 
                         Rectangle {
-                            width: Math.max(6, parent.width * Math.min(1, Math.max(0, sys.dispValue)))
-                            height: parent.height
-                            radius: 3
-                            color: sys.dispColor
+                            width: 46
+                            height: 46
+                            radius: Theme.radiusSmall
+                            color: Theme.glass
+                            border.width: Theme.isWP ? 0 : 1
+                            border.color: Theme.stroke
 
-                            Behavior on width {
-                                NumberAnimation {
-                                    duration: 500
-                                    easing.type: Easing.OutCubic
+                            Text {
+                                anchors.centerIn: parent
+                                text: sys.iconGlyph
+                                font.family: Theme.iconFont
+                                font.pixelSize: 22
+                                color: sys.dispColor
+                            }
+                        }
+
+                        Item {
+                            width: parent.width - 46
+                            height: parent.height
+
+                            Column {
+                                anchors.left: parent.left
+                                anchors.leftMargin: 10
+                                anchors.verticalCenter: parent.verticalCenter
+                                spacing: 2
+
+                                Text {
+                                    text: sys.longTitle
+                                    font.family: Theme.fontFamily
+                                    font.pixelSize: 14
+                                    font.weight: Font.DemiBold
+                                    color: Theme.text
+                                }
+
+                                Text {
+                                    text: sys.kind === "bat" ? (root.batCharging ? I18n.t("charging_state") : (root.batStatus === "Full" ? I18n.t("full_charge") : (root.batTime !== "" ? (I18n.t("remaining_about") + " " + root.batTime) : I18n.t("discharging_state")))) : (sys.subTxt !== "" ? sys.subTxt : (Math.round(sys.dispValue * 100) + "% " + I18n.t("load")))
+                                    font.family: Theme.fontFamily
+                                    font.pixelSize: 11
+                                    color: sys.kind === "bat" && root.batCharging ? Theme.accent : Theme.textDim
                                 }
                             }
                         }
                     }
 
-                    Item {
-                        width: parent.width
-                        height: 12
+                    Row {
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        spacing: 3
 
                         Text {
-                            anchors.left: parent.left
-                            anchors.verticalCenter: parent.verticalCenter
-                            text: "0%"
+                            text: Math.round(sys.dispValue * 100)
                             font.family: Theme.fontFamily
-                            font.pixelSize: 9
-                            color: Theme.textDim
+                            font.pixelSize: 46
+                            font.weight: Font.Light
+                            color: Theme.text
                         }
 
                         Text {
-                            anchors.right: parent.right
-                            anchors.verticalCenter: parent.verticalCenter
-                            text: sys.kind === "ram" && root.ramTotal !== "" ? (root.ramUsed + " / " + root.ramTotal + " GB") : "100%"
+                            anchors.bottom: parent.bottom
+                            anchors.bottomMargin: 8
+                            text: "%"
                             font.family: Theme.fontFamily
-                            font.pixelSize: 9
+                            font.pixelSize: 18
+                            font.weight: Font.Light
                             color: Theme.textDim
+                        }
+                    }
+
+                    Column {
+                        width: parent.width
+                        spacing: 4
+
+                        Rectangle {
+                            width: parent.width
+                            height: 4
+                            radius: Theme.isWP ? 0 : 2
+                            color: Theme.alpha(sys.dispColor, 0.16)
+
+                            Rectangle {
+                                width: Math.max(4, parent.width * Math.min(1, Math.max(0, sys.dispValue)))
+                                height: parent.height
+                                radius: Theme.isWP ? 0 : 2
+                                color: sys.dispColor
+                            }
+                        }
+
+                        Item {
+                            width: parent.width
+                            height: 14
+
+                            Text {
+                                anchors.left: parent.left
+                                text: "0%"
+                                font.family: Theme.fontFamily
+                                font.pixelSize: 10
+                                color: Theme.textDim
+                            }
+
+                            Text {
+                                anchors.right: parent.right
+                                text: sys.kind === "ram" && root.ramTotal !== "" ? (root.ramUsed + " / " + root.ramTotal + " GB") : "100%"
+                                font.family: Theme.fontFamily
+                                font.pixelSize: 10
+                                color: Theme.textDim
+                            }
                         }
                     }
                 }
@@ -2861,18 +3431,19 @@ PanelBase {
         kind: "ssd"
     }
 
-    component ClockW: Rectangle {
+    component ClockW: TileFrame {
         id: clk
 
         property bool showCal: false
         readonly property bool large: width >= 170 && height >= 170
+        readonly property bool isWide: width > 120 && height < 120
+        readonly property bool isTallOnly: height > 120 && width <= 120
+        readonly property bool isXL: width >= 260 && height >= 170
 
-        radius: Theme.radius
-        color: Theme.alpha(Theme.accent, 0.92)
+        color: Theme.isMaterial ? (showCal ? Theme.surface_container_high : Theme.surface_container) : Theme.alpha(Theme.accent, Theme.isWP ? 1.0 : 0.92)
 
         transform: Scale {
             id: clockScale
-
             origin.x: clk.width / 2
             origin.y: clk.height / 2
             xScale: 1
@@ -2880,173 +3451,449 @@ PanelBase {
 
         SequentialAnimation {
             id: calFlip
-
             NumberAnimation {
                 target: clockScale
                 property: "xScale"
                 to: 0
-                duration: 200
+                duration: 180
                 easing.type: Easing.InQuad
             }
-
             ScriptAction {
                 script: clk.showCal = !clk.showCal
             }
-
             NumberAnimation {
                 target: clockScale
                 property: "xScale"
                 to: 1
-                duration: 200
+                duration: 180
                 easing.type: Easing.OutBack
             }
         }
 
         Connections {
             target: root
-
             function onShownChanged() {
                 if (!root.shown)
                     clk.showCal = false
             }
         }
 
-        MouseArea {
-            anchors.fill: parent
-            enabled: clk.large
-            cursorShape: clk.large ? Qt.PointingHandCursor : Qt.ArrowCursor
-            onClicked: calFlip.restart()
+        onClicked: {
+            if (clk.large)
+                calFlip.restart()
         }
 
-        Column {
-            anchors.centerIn: parent
-            visible: !clk.showCal
-            spacing: clk.large ? 2 : 6
-
-            Text {
-                anchors.horizontalCenter: parent.horizontalCenter
-                text: Qt.formatTime(clock.date, "HH:mm")
-                font.family: Theme.fontFamily
-                font.pixelSize: clk.large ? 58 : clk.width > 100 ? 34 : 24
-                font.weight: Font.Light
-                color: Theme.text
-            }
-
-            Text {
-                anchors.horizontalCenter: parent.horizontalCenter
-                visible: clk.width > 100
-                text: clk.large ? ruDate(clock.date) : Qt.formatDate(clock.date, "d MMM")
-                font.family: Theme.fontFamily
-                font.pixelSize: clk.large ? 13 : 11
-                color: Theme.text
-            }
-        }
-
-        // секундная полоска (только крупные версии)
-        Rectangle {
-            anchors {
-                left: parent.left
-                right: parent.right
-                bottom: parent.bottom
-                margins: 12
-            }
-            visible: clk.large && !clk.showCal
-            height: 3
-            radius: 1.5
-            color: Qt.rgba(1, 1, 1, 0.25)
-
-            Rectangle {
-                width: parent.width * (clock.date.getSeconds() / 60)
-                height: parent.height
-                radius: 1.5
-                color: Qt.rgba(1, 1, 1, 0.9)
-
-                Behavior on width {
-                    NumberAnimation {
-                        duration: 950
-                        easing.type: Easing.Linear
-                    }
-                }
-            }
-        }
-
-        // мини-календарь (заменяет часы по клику, только 2x2)
+        // ── Лицевая сторона: Analog Clock 1 для Material You ИЛИ Metro Digital Clock для Metro/WP ──
         Item {
             anchors.fill: parent
-            visible: clk.showCal
+            visible: !clk.showCal
 
-            Text {
-                anchors {
-                    top: parent.top
-                    topMargin: 12
-                    horizontalCenter: parent.horizontalCenter
+            // Metro Digital Clock (для Metro и Windows Phone)
+            Column {
+                anchors.centerIn: parent
+                visible: !Theme.isMaterial && !clk.isTallOnly
+                spacing: 2
+
+                Text {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    text: Qt.formatTime(clock.date, "HH:mm")
+                    font.family: Theme.headlineFont
+                    font.pixelSize: clk.isXL ? 64 : (clk.large ? 54 : (clk.isWide ? 38 : 28))
+                    font.weight: Font.DemiBold
+                    color: Theme.text
                 }
-                text: ruMonth(clock.date)
-                font.family: Theme.fontFamily
-                font.pixelSize: 12
-                color: Theme.text
+
+                Text {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    text: ruDate(clock.date)
+                    font.family: Theme.fontFamily
+                    font.pixelSize: clk.isXL ? 13 : 12
+                    color: Theme.textDim
+                    visible: clk.large || clk.isWide || clk.isXL
+                }
             }
 
-            Grid {
-                anchors {
-                    horizontalCenter: parent.horizontalCenter
-                    verticalCenter: parent.verticalCenter
-                    verticalCenterOffset: 6
+            // Metro 1x2: часы стопкой + дата с переносом
+            Column {
+                anchors.centerIn: parent
+                anchors.verticalCenterOffset: -6
+                visible: !Theme.isMaterial && clk.isTallOnly
+                spacing: 0
+
+                Text {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    text: Qt.formatTime(clock.date, "HH")
+                    font.family: Theme.headlineFont
+                    font.pixelSize: 36
+                    font.weight: Font.DemiBold
+                    color: Theme.text
                 }
-                columns: 7
+
+                Text {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    text: Qt.formatTime(clock.date, "mm")
+                    font.family: Theme.headlineFont
+                    font.pixelSize: 36
+                    font.weight: Font.Light
+                    color: Theme.text
+                }
+
+                Text {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    width: 76
+                    text: ruDate(clock.date)
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 10
+                    color: Theme.textDim
+                    horizontalAlignment: Text.AlignHCenter
+                    wrapMode: Text.WordWrap
+                    maximumLineCount: 2
+                    elide: Text.ElideRight
+                }
+            }
+
+            // Секундная полоска снизу (Metro Live Tiles)
+            Rectangle {
+                anchors {
+                    left: parent.left
+                    right: parent.right
+                    bottom: parent.bottom
+                    margins: clk.large ? 12 : 8
+                }
+                visible: (clk.large || clk.isWide || clk.isTallOnly) && !Theme.isMaterial
+                height: 3
+                radius: Theme.isWP ? 0 : 1.5
+                color: Qt.rgba(1, 1, 1, 0.25)
+
+                Rectangle {
+                    width: parent.width * (clock.date.getSeconds() / 60)
+                    height: parent.height
+                    radius: Theme.isWP ? 0 : 1.5
+                    color: Qt.rgba(1, 1, 1, 0.9)
+
+                    Behavior on width {
+                        NumberAnimation {
+                            duration: clock.date.getSeconds() === 0 ? 0 : 950
+                            easing.type: Easing.Linear
+                        }
+                    }
+                }
+            }
+
+            // 12-petaled Scalloped flower badge (Pixel Material You clock shape)
+            Item {
+                id: flowerBadge
+                visible: Theme.isMaterial && !clk.isXL
+                anchors.centerIn: clk.isWide ? undefined : parent
+                anchors.left: clk.isWide ? parent.left : undefined
+                anchors.leftMargin: clk.isWide ? 14 : 0
+                anchors.verticalCenter: clk.isWide ? parent.verticalCenter : undefined
+                width: clk.isWide ? (parent.height - 14) : (Math.min(parent.width, parent.height) - 16)
+                height: width
+                anchors.horizontalCenterOffset: clk.isWide ? 0 : 0
+
+                // Central disc
+                Rectangle {
+                    anchors.centerIn: parent
+                    width: parent.width * 0.74
+                    height: width
+                    radius: width / 2
+                    color: Theme.secondary_container
+                }
+
+                // 12 outer petal lobes
+                Repeater {
+                    model: 12
+                    Rectangle {
+                        readonly property real angle: index * (Math.PI * 2 / 12)
+                        readonly property real rDist: flowerBadge.width * 0.36
+                        width: flowerBadge.width * 0.28
+                        height: width
+                        radius: width / 2
+                        x: flowerBadge.width / 2 + rDist * Math.cos(angle) - width / 2
+                        y: flowerBadge.height / 2 + rDist * Math.sin(angle) - height / 2
+                        color: Theme.secondary_container
+                    }
+                }
+
+                // Hour Hand (Material You rounded pill)
+                Item {
+                    id: hourPivot
+                    anchors.centerIn: parent
+                    width: 0
+                    height: 0
+                    rotation: {
+                        const d = clock.date
+                        return (d.getHours() % 12 + d.getMinutes() / 60) * 30
+                    }
+                    Behavior on rotation { RotationAnimation { duration: 300; direction: RotationAnimation.Shortest } }
+
+                    Rectangle {
+                        x: -Math.max(3, flowerBadge.width * 0.03)
+                        y: -flowerBadge.height * 0.26
+                        width: Math.max(6, flowerBadge.width * 0.06)
+                        height: flowerBadge.height * 0.26
+                        radius: width / 2
+                        color: Theme.on_secondary_container
+                    }
+                }
+
+                // Minute Hand (Material You rounded pill)
+                Item {
+                    id: minutePivot
+                    anchors.centerIn: parent
+                    width: 0
+                    height: 0
+                    rotation: {
+                        const d = clock.date
+                        return (d.getMinutes() + d.getSeconds() / 60) * 6
+                    }
+                    Behavior on rotation { RotationAnimation { duration: 250; direction: RotationAnimation.Shortest } }
+
+                    Rectangle {
+                        x: -Math.max(2.5, flowerBadge.width * 0.025)
+                        y: -flowerBadge.height * 0.38
+                        width: Math.max(5, flowerBadge.width * 0.05)
+                        height: flowerBadge.height * 0.38
+                        radius: width / 2
+                        color: Theme.primary
+                    }
+                }
+
+                // Center hub
+                Rectangle {
+                    anchors.centerIn: parent
+                    width: Math.max(8, flowerBadge.width * 0.08)
+                    height: width
+                    radius: width / 2
+                    color: Theme.on_primary_container
+                }
+
+                // 6 o clock accent circle dot (фото 5)
+                Rectangle {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    y: parent.height * 0.80
+                    width: Math.max(6, flowerBadge.width * 0.06)
+                    height: width
+                    radius: width / 2
+                    color: Theme.tertiary
+                }
+            }
+
+            // Правая часть для 2x1 (только material: цветок слева + текст справа)
+            Column {
+                anchors {
+                    left: parent.horizontalCenter
+                    right: parent.right
+                    verticalCenter: parent.verticalCenter
+                    margins: 10
+                }
+                visible: clk.isWide && Theme.isMaterial
+                spacing: 2
+
+                Text {
+                    text: Qt.formatTime(clock.date, "HH:mm")
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 26
+                    font.weight: Font.DemiBold
+                    color: Theme.on_surface
+                }
+
+                Text {
+                    text: shortDate(clock.date)
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 11
+                    color: Theme.on_surface_variant
+                }
+            }
+
+            // Material 1x2: время под цветком
+            Column {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                anchors.bottomMargin: 12
+                visible: clk.isTallOnly && Theme.isMaterial
                 spacing: 1
 
-                Repeater {
-                    model: {
-                        const now = clock.date
-                        const days = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate()
-                        const first = new Date(now.getFullYear(), now.getMonth(), 1).getDay()
-                        const shift = (first + 6) % 7
-                        const cells = []
-                        for (let i = 0; i < shift; i++)
-                            cells.push(0)
-                        for (let d = 1; d <= days; d++)
-                            cells.push(d)
-                        return cells
+                Text {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    text: Qt.formatTime(clock.date, "HH:mm")
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 17
+                    font.weight: Font.DemiBold
+                    color: Theme.on_surface
+                }
+
+                Text {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    text: shortDate(clock.date)
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 10
+                    color: Theme.on_surface_variant
+                }
+            }
+
+            // Material 3x2: цветок + текст в ряд
+            Row {
+                anchors.centerIn: parent
+                visible: clk.isXL && Theme.isMaterial
+                spacing: 18
+
+                Item {
+                    width: 140
+                    height: 140
+                    anchors.verticalCenter: parent.verticalCenter
+
+                    Rectangle {
+                        anchors.centerIn: parent
+                        width: parent.width * 0.74
+                        height: width
+                        radius: width / 2
+                        color: Theme.secondary_container
                     }
 
-                    delegate: Item {
-                        required property int modelData
-
-                        width: 22
-                        height: 20
-
+                    Repeater {
+                        model: 12
                         Rectangle {
-                            anchors.centerIn: parent
-                            width: 17
-                            height: 17
-                            radius: 8.5
-                            visible: modelData === clock.date.getDate()
-                            color: Theme.text
+                            readonly property real angle: index * (Math.PI * 2 / 12)
+                            readonly property real rDist: 140 * 0.36
+                            width: 140 * 0.28
+                            height: width
+                            radius: width / 2
+                            x: 70 + rDist * Math.cos(angle) - width / 2
+                            y: 70 + rDist * Math.sin(angle) - height / 2
+                            color: Theme.secondary_container
                         }
+                    }
 
-                        Text {
-                            anchors.centerIn: parent
-                            visible: modelData > 0
-                            text: modelData
-                            font.family: Theme.fontFamily
-                            font.pixelSize: 10
-                            color: modelData === clock.date.getDate() ? Theme.accent : Theme.text
-                        }
+                    Text {
+                        anchors.centerIn: parent
+                        text: Qt.formatTime(clock.date, "HH:mm")
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 20
+                        font.weight: Font.DemiBold
+                        color: Theme.on_secondary_container
+                    }
+                }
+
+                Column {
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: 2
+
+                    Text {
+                        text: ruDate(clock.date)
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 13
+                        color: Theme.on_surface
+                        width: 110
+                        wrapMode: Text.WordWrap
+                    }
+
+                    Text {
+                        text: Qt.formatTime(clock.date, "ss") + " сек"
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 11
+                        color: Theme.on_surface_variant
                     }
                 }
             }
 
-            Text {
-                anchors {
-                    bottom: parent.bottom
-                    bottomMargin: 10
-                    horizontalCenter: parent.horizontalCenter
+        }
+
+        // ── Обратная сторона: Calendar 4 (фото 6) ──
+        Item {
+            anchors.fill: parent
+            visible: clk.showCal && clk.large
+            anchors.margins: 12
+
+            Column {
+                anchors.fill: parent
+                spacing: 6
+
+                Item {
+                    width: parent.width
+                    height: 24
+
+                    Text {
+                        anchors.centerIn: parent
+                        text: {
+                            const s = ruMonth(clock.date)
+                            return s ? (s.charAt(0).toUpperCase() + s.slice(1)) : ""
+                        }
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 14
+                        font.weight: Font.DemiBold
+                        color: Theme.isMaterial ? Theme.primary : "#ffffff"
+                    }
                 }
-                text: ruDate(clock.date)
-                font.family: Theme.fontFamily
-                font.pixelSize: 10
-                color: Theme.text
+
+                Row {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    spacing: 4
+
+                    Repeater {
+                        model: ["П", "В", "С", "Ч", "П", "С", "В"]
+                        Item {
+                            width: 18
+                            height: 14
+                            Text {
+                                anchors.centerIn: parent
+                                text: modelData
+                                font.family: Theme.fontFamily
+                                font.pixelSize: 10
+                                font.weight: Font.Medium
+                                color: Theme.isMaterial ? Theme.on_surface_variant : Qt.rgba(1, 1, 1, 0.85)
+                            }
+                        }
+                    }
+                }
+
+                Grid {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    columns: 7
+                    spacing: 4
+
+                    Repeater {
+                        model: {
+                            const now = clock.date
+                            const days = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate()
+                            const first = new Date(now.getFullYear(), now.getMonth(), 1).getDay()
+                            const shift = (first + 6) % 7
+                            const cells = []
+                            for (let i = 0; i < shift; i++)
+                                cells.push(0)
+                            for (let d = 1; d <= days; d++)
+                                cells.push(d)
+                            return cells
+                        }
+
+                        delegate: Item {
+                            required property int modelData
+                            width: 18
+                            height: 16
+
+                            Rectangle {
+                                anchors.centerIn: parent
+                                width: 16
+                                height: 16
+                                radius: Theme.isWP ? 0 : 8
+                                visible: modelData === clock.date.getDate()
+                                color: Theme.isMaterial ? Theme.primary : "#ffffff"
+                            }
+
+                            Text {
+                                anchors.centerIn: parent
+                                visible: modelData > 0
+                                text: modelData
+                                font.family: Theme.fontFamily
+                                font.pixelSize: 10
+                                font.weight: modelData === clock.date.getDate() ? Font.Bold : Font.Normal
+                                color: modelData === clock.date.getDate() ? (Theme.isMaterial ? Theme.on_primary : Theme.accent) : (Theme.isMaterial ? Theme.on_surface : "#ffffff")
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -3055,10 +3902,11 @@ PanelBase {
         id: weatherTile
 
         property bool alt: false
+        readonly property bool isTallOnly: height > 120 && width <= 120
+        readonly property bool isXL: width >= 260 && height >= 170
 
         transform: Scale {
             id: weatherScale
-
             origin.x: weatherTile.width / 2
             origin.y: weatherTile.height / 2
             xScale: 1
@@ -3073,31 +3921,30 @@ PanelBase {
 
         SequentialAnimation {
             id: weatherFlip
-
             NumberAnimation {
                 target: weatherScale
                 property: "xScale"
                 to: 0
-                duration: 240
+                duration: 200
                 easing.type: Easing.InQuad
             }
-
             ScriptAction {
                 script: weatherTile.alt = !weatherTile.alt
             }
-
             NumberAnimation {
                 target: weatherScale
                 property: "xScale"
                 to: 1
-                duration: 240
+                duration: 200
                 easing.type: Easing.OutQuad
             }
         }
 
+        // ── Классический вид Metro / WP (Theme.isMaterial == false) ──
         Column {
             anchors.centerIn: parent
             spacing: 4
+            visible: !Theme.isMaterial && !weatherTile.isTallOnly && !weatherTile.isXL
 
             Text {
                 anchors.horizontalCenter: parent.horizontalCenter
@@ -3118,37 +3965,339 @@ PanelBase {
 
             Text {
                 anchors.horizontalCenter: parent.horizontalCenter
-                text: !Weather.loaded ? "загрузка..." : weatherTile.alt ? "ветер " + Weather.wind.toFixed(1) + " м/с" : Weather.text(Weather.code)
+                text: !Weather.loaded ? I18n.t("loading_dots") : weatherTile.alt ? (I18n.t("wind") + " " + Weather.wind.toFixed(1) + " " + I18n.t("ms")) : Weather.text(Weather.code)
                 font.family: Theme.fontFamily
                 font.pixelSize: 12
                 color: Theme.textDim
             }
         }
 
-        Text {
-            anchors {
-                left: parent.left
-                leftMargin: 12
-                bottom: parent.bottom
-                bottomMargin: 10
+        // Metro 1x2: иконка + температура + описание стопкой
+        Column {
+            anchors.centerIn: parent
+            spacing: 3
+            visible: !Theme.isMaterial && weatherTile.isTallOnly
+
+            Text {
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: Weather.loaded ? Weather.glyph(Weather.code) : "\uf0595"
+                font.family: Theme.iconFont
+                font.pixelSize: 30
+                color: Theme.accent
             }
-            text: Weather.city
-            font.family: Theme.fontFamily
-            font.pixelSize: 11
-            color: Theme.textDim
+
+            Text {
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: Weather.loaded ? Math.round(Weather.temp) + "°" : "—"
+                font.family: Theme.fontFamily
+                font.pixelSize: 26
+                font.weight: Font.Light
+                color: Theme.text
+            }
+
+            Text {
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: 76
+                text: !Weather.loaded ? I18n.t("loading_dots") : weatherTile.alt ? (Weather.wind.toFixed(1) + " " + I18n.t("ms")) : Weather.text(Weather.code)
+                font.family: Theme.fontFamily
+                font.pixelSize: 10
+                color: Theme.textDim
+                horizontalAlignment: Text.AlignHCenter
+                wrapMode: Text.WordWrap
+                maximumLineCount: 2
+                elide: Text.ElideRight
+            }
         }
 
-        Text {
-            anchors {
-                right: parent.right
-                rightMargin: 12
-                bottom: parent.bottom
-                bottomMargin: 10
+        // Metro 3x2:hero — слева иконка+температура, справа детали
+        Row {
+            anchors.fill: parent
+            anchors.margins: 14
+            spacing: 14
+            visible: !Theme.isMaterial && weatherTile.isXL
+
+            Row {
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: 10
+
+                Text {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: Weather.loaded ? Weather.glyph(Weather.code) : "\uf0595"
+                    font.family: Theme.iconFont
+                    font.pixelSize: 52
+                    color: Theme.accent
+                }
+
+                Text {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: Weather.loaded ? Math.round(Weather.temp) + "°" : "—"
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 40
+                    font.weight: Font.Light
+                    color: Theme.text
+                }
             }
-            text: !Weather.loaded ? "" : weatherTile.alt ? Weather.humidity + "%" : Math.round(Weather.feelsLike) + "° ощущ."
-            font.family: Theme.fontFamily
-            font.pixelSize: 11
-            color: Theme.textDim
+
+            Column {
+                anchors.verticalCenter: parent.verticalCenter
+                width: parent.width - 148
+                spacing: 4
+
+                Text {
+                    width: parent.width
+                    text: Weather.loaded ? Weather.text(Weather.code) : I18n.t("loading_dots")
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 14
+                    font.weight: Font.DemiBold
+                    color: Theme.text
+                    elide: Text.ElideRight
+                }
+
+                Text {
+                    width: parent.width
+                    text: Weather.loaded ? (I18n.t("wind") + " " + Weather.wind.toFixed(1) + " " + I18n.t("ms")) : ""
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 11
+                    color: Theme.textDim
+                    elide: Text.ElideRight
+                }
+
+                Text {
+                    width: parent.width
+                    text: Weather.loaded ? (Weather.humidity + "% • " + Math.round(Weather.feelsLike) + "° " + I18n.t("feels")) : ""
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 11
+                    color: Theme.textDim
+                    elide: Text.ElideRight
+                }
+
+                Text {
+                    width: parent.width
+                    visible: Weather.city !== ""
+                    text: Weather.city
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 11
+                    color: Theme.accent
+                    elide: Text.ElideRight
+                }
+            }
+        }
+
+        // ── Материальный вид (Theme.isMaterial == true) ──
+        Column {
+            anchors.fill: parent
+            anchors.margins: 12
+            spacing: 6
+            visible: Theme.isMaterial && !weatherTile.isTallOnly
+
+            Row {
+                width: parent.width
+                height: 24
+                spacing: 6
+
+                Rectangle {
+                    height: 22
+                    width: cityChipRow.width + 14
+                    radius: Theme.radiusPill
+                    color: Theme.surface_container_high
+
+                    Row {
+                        id: cityChipRow
+                        anchors.centerIn: parent
+                        spacing: 4
+                        Text {
+                            text: "\uf3c5"
+                            font.family: Theme.iconFont
+                            font.pixelSize: 10
+                            color: Theme.primary
+                        }
+                        Text {
+                            text: Weather.city || "Погода"
+                            font.family: Theme.fontFamily
+                            font.pixelSize: 11
+                            font.weight: Font.Medium
+                            color: Theme.on_surface
+                            elide: Text.ElideRight
+                        }
+                    }
+                }
+            }
+
+            Row {
+                width: parent.width
+                height: 52
+                spacing: 10
+
+                Text {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: Weather.loaded ? Math.round(Weather.temp) + "°" : "—"
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 42
+                    font.weight: Font.Normal
+                    color: Theme.primary
+                }
+
+                Rectangle {
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 44
+                    height: 44
+                    radius: 22
+                    color: Theme.primary_container
+
+                    Text {
+                        anchors.centerIn: parent
+                        text: Weather.loaded ? Weather.glyph(Weather.code) : "\uf0595"
+                        font.family: Theme.iconFont
+                        font.pixelSize: 22
+                        color: Theme.on_primary_container
+                    }
+                }
+            }
+
+            Text {
+                width: parent.width
+                text: !Weather.loaded ? I18n.t("loading_dots") : weatherTile.alt ? (I18n.t("wind") + " " + Weather.wind.toFixed(1) + " " + I18n.t("ms")) : Weather.text(Weather.code)
+                font.family: Theme.fontFamily
+                font.pixelSize: 12
+                font.weight: Font.Medium
+                color: Theme.on_surface
+                elide: Text.ElideRight
+            }
+
+            Row {
+                width: parent.width
+                spacing: 6
+
+                Rectangle {
+                    height: 22
+                    width: (parent.width - 6) / 2
+                    radius: Theme.radiusPill
+                    color: Theme.surface_container_high
+
+                    Row {
+                        anchors.centerIn: parent
+                        spacing: 4
+                        Text {
+                            text: "\uf043"
+                            font.family: Theme.iconFont
+                            font.pixelSize: 10
+                            color: Theme.tertiary
+                        }
+                        Text {
+                            text: Weather.humidity + "%"
+                            font.family: Theme.fontFamily
+                            font.pixelSize: 10
+                            color: Theme.on_surface_variant
+                        }
+                    }
+                }
+
+                Rectangle {
+                    height: 22
+                    width: (parent.width - 6) / 2
+                    radius: Theme.radiusPill
+                    color: Theme.surface_container_high
+
+                    Row {
+                        anchors.centerIn: parent
+                        spacing: 4
+                        Text {
+                            text: "\uf72e"
+                            font.family: Theme.iconFont
+                            font.pixelSize: 10
+                            color: Theme.primary
+                        }
+                        Text {
+                            text: Math.round(Weather.feelsLike) + "° " + I18n.t("feels")
+                            font.family: Theme.fontFamily
+                            font.pixelSize: 10
+                            color: Theme.on_surface_variant
+                        }
+                    }
+                }
+            }
+        }
+
+        // Material 1x2: компактная стопка, пилюли друг под другом
+        Column {
+            anchors.fill: parent
+            anchors.margins: 10
+            spacing: 5
+            visible: Theme.isMaterial && weatherTile.isTallOnly
+
+            Rectangle {
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: 38
+                height: 38
+                radius: 19
+                color: Theme.primary_container
+
+                Text {
+                    anchors.centerIn: parent
+                    text: Weather.loaded ? Weather.glyph(Weather.code) : "\uf0595"
+                    font.family: Theme.iconFont
+                    font.pixelSize: 19
+                    color: Theme.on_primary_container
+                }
+            }
+
+            Text {
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: Weather.loaded ? Math.round(Weather.temp) + "°" : "—"
+                font.family: Theme.fontFamily
+                font.pixelSize: 26
+                font.weight: Font.Normal
+                color: Theme.primary
+            }
+
+            Text {
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: parent.width
+                text: !Weather.loaded ? I18n.t("loading_dots") : Weather.text(Weather.code)
+                font.family: Theme.fontFamily
+                font.pixelSize: 10
+                font.weight: Font.Medium
+                color: Theme.on_surface
+                horizontalAlignment: Text.AlignHCenter
+                wrapMode: Text.WordWrap
+                maximumLineCount: 2
+                elide: Text.ElideRight
+            }
+
+            Column {
+                width: parent.width
+                spacing: 4
+
+                Rectangle {
+                    width: parent.width
+                    height: 20
+                    radius: Theme.radiusPill
+                    color: Theme.surface_container_high
+
+                    Text {
+                        anchors.centerIn: parent
+                        text: "\uf043 " + Weather.humidity + "%"
+                        font.family: Theme.iconFont
+                        font.pixelSize: 9
+                        color: Theme.on_surface_variant
+                    }
+                }
+
+                Rectangle {
+                    width: parent.width
+                    height: 20
+                    radius: Theme.radiusPill
+                    color: Theme.surface_container_high
+
+                    Text {
+                        anchors.centerIn: parent
+                        text: "\uf72e " + Math.round(Weather.feelsLike) + "°"
+                        font.family: Theme.iconFont
+                        font.pixelSize: 9
+                        color: Theme.on_surface_variant
+                    }
+                }
+            }
         }
 
         onClicked: root.expandMode = root.expandMode === "weather" ? "none" : "weather"
@@ -3158,54 +4307,124 @@ PanelBase {
         id: appTile
 
         property string appId: ""
-        property var app: null
-
-        onAppIdChanged: app = root.findApp(appId)
-        Component.onCompleted: app = root.findApp(appId)
+        readonly property var app: root.findApp(appId)
+        readonly property bool isXL: width >= 260 && height >= 170
 
         Column {
             anchors.centerIn: parent
             spacing: 6
+            visible: !appTile.isXL
 
-            Item {
+            Rectangle {
                 anchors.horizontalCenter: parent.horizontalCenter
-                width: appTile.height > 100 ? 56 : appTile.width > 100 ? 40 : 30
+                width: appTile.height > 100 ? 56 : (appTile.width > 100 ? 44 : 36)
                 height: width
+                radius: Theme.isMaterial ? (appTile.height > 100 ? 18 : 14) : Theme.radiusSmall
+                color: Theme.isMaterial ? Theme.surface_container_high : Theme.glass
+                border.width: Theme.isMaterial || Theme.isWP ? 0 : 1
+                border.color: Theme.stroke
 
                 IconImage {
                     anchors.centerIn: parent
                     visible: appTile.app && appTile.app.icon !== "" && Quickshell.hasThemeIcon(appTile.app.icon)
-                    implicitSize: parent.width
+                    implicitSize: parent.width * 0.72
                     source: appTile.app && appTile.app.icon !== "" && Quickshell.hasThemeIcon(appTile.app.icon) ? Quickshell.iconPath(appTile.app.icon) : ""
                 }
 
                 Text {
                     anchors.centerIn: parent
                     visible: !(appTile.app && appTile.app.icon !== "" && Quickshell.hasThemeIcon(appTile.app.icon))
-                    text: "\uf1b2"
+                    text: (appTile.appId === "metro-settings" || appTile.appId === "metro-settings.desktop") ? "\uf013" : "\uf1b2"
                     font.family: Theme.iconFont
                     font.pixelSize: 16
-                    color: Theme.textDim
+                    color: Theme.isMaterial ? Theme.primary : Theme.accent
                 }
             }
 
             Text {
                 anchors.horizontalCenter: parent.horizontalCenter
                 width: appTile.width - 12
-                text: appTile.app ? appTile.app.name : appTile.appId
+                text: appTile.app ? appTile.app.name : (appTile.appId === "metro-settings" ? I18n.t("settings") : appTile.appId)
                 font.family: Theme.fontFamily
                 font.pixelSize: appTile.height > 100 ? 12 : 10
-                color: Theme.text
+                font.weight: Theme.isMaterial ? Font.Medium : Font.Normal
+                color: Theme.isMaterial ? Theme.on_surface : Theme.text
                 elide: Text.ElideRight
                 horizontalAlignment: Text.AlignHCenter
+            }
+        }
+
+        // 3x2: иконка слева + название справа
+        Row {
+            anchors.fill: parent
+            anchors.margins: 14
+            spacing: 14
+            visible: appTile.isXL
+
+            Rectangle {
+                anchors.verticalCenter: parent.verticalCenter
+                width: 56
+                height: 56
+                radius: Theme.isMaterial ? 18 : Theme.radiusSmall
+                color: Theme.isMaterial ? Theme.surface_container_high : Theme.glass
+                border.width: Theme.isMaterial || Theme.isWP ? 0 : 1
+                border.color: Theme.stroke
+
+                IconImage {
+                    anchors.centerIn: parent
+                    visible: appTile.app && appTile.app.icon !== "" && Quickshell.hasThemeIcon(appTile.app.icon)
+                    implicitSize: 40
+                    source: appTile.app && appTile.app.icon !== "" && Quickshell.hasThemeIcon(appTile.app.icon) ? Quickshell.iconPath(appTile.app.icon) : ""
+                }
+
+                Text {
+                    anchors.centerIn: parent
+                    visible: !(appTile.app && appTile.app.icon !== "" && Quickshell.hasThemeIcon(appTile.app.icon))
+                    text: (appTile.appId === "metro-settings" || appTile.appId === "metro-settings.desktop") ? "\uf013" : "\uf1b2"
+                    font.family: Theme.iconFont
+                    font.pixelSize: 22
+                    color: Theme.isMaterial ? Theme.primary : Theme.accent
+                }
+            }
+
+            Column {
+                anchors.verticalCenter: parent.verticalCenter
+                width: parent.width - 70
+                spacing: 4
+
+                Text {
+                    width: parent.width
+                    text: appTile.app ? appTile.app.name : (appTile.appId === "metro-settings" ? I18n.t("settings") : appTile.appId)
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 15
+                    font.weight: Font.DemiBold
+                    color: Theme.isMaterial ? Theme.on_surface : Theme.text
+                    wrapMode: Text.WordWrap
+                    maximumLineCount: 2
+                    elide: Text.ElideRight
+                }
+
+                Text {
+                    width: parent.width
+                    text: appTile.appId
+                    font.family: "monospace"
+                    font.pixelSize: 10
+                    color: Theme.isMaterial ? Theme.on_surface_variant : Theme.textDim
+                    elide: Text.ElideRight
+                }
             }
         }
 
         onClicked: {
             if (app) {
                 app.execute()
-                root.open = false
+            } else if (appId === "metro-settings" || appId === "metro-settings.desktop") {
+                pSettingsDirect.running = true
+            } else if (appId !== "") {
+                pAppDirect.command = ["sh", "-c", "export PATH=\"$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH\"; " + appId]
+                pAppDirect.running = true
             }
+            root.open = false
         }
     }
 

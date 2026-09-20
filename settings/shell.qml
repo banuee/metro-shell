@@ -5,26 +5,31 @@ import Quickshell.Io
 FloatingWindow {
     id: win
 
-    title: "настройки"
+    title: I18n.t("settings")
     color: "transparent"
     visible: true
-    implicitWidth: 1080
-    implicitHeight: 700
-    minimumSize: Qt.size(880, 540)
+    implicitWidth: 1120
+    implicitHeight: 740
+    minimumSize: Qt.size(920, 580)
 
     readonly property var sections: [
-        { label: "персонализация", glyph: "\uf1fc", file: "Personalization.qml", sub: "обои, акцент, иконки" },
-        { label: "сеть", glyph: "\uf1eb", file: "NetworkSec.qml", sub: "wi-fi и bluetooth" },
-        { label: "звук", glyph: "\uf028", file: "SoundSec.qml", sub: "устройства и громкость" },
-        { label: "дисплей", glyph: "\uf26c", file: "DisplaySec.qml", sub: "мониторы и режимы" },
-        { label: "питание", glyph: "\uf240", file: "PowerSec.qml", sub: "профили и батарея" },
-        { label: "виджеты", glyph: "\uf009", file: "WidgetsSec.qml", sub: "сетка metro-шелла" },
-        { label: "о системе", glyph: "\uf109", file: "AboutSec.qml", sub: "железо и софт" }
+        { label: I18n.t("personalization"), glyph: "\uf1fc", file: "Personalization.qml", sub: I18n.t("personalization_sub") },
+        { label: I18n.t("network"), glyph: "\uf1eb", file: "NetworkSec.qml", sub: I18n.t("network_sub") },
+        { label: I18n.t("keyboard_input"), glyph: "\uf11c", file: "KeyboardSec.qml", sub: I18n.t("keyboard_sub") },
+        { label: I18n.t("sound_sec"), glyph: "\uf028", file: "SoundSec.qml", sub: I18n.t("sound_sub") },
+        { label: I18n.t("display"), glyph: "\uf26c", file: "DisplaySec.qml", sub: I18n.t("display_sub") },
+        { label: I18n.t("window_manager"), glyph: "\uf2d0", file: "WindowManagerSec.qml", sub: I18n.t("window_manager_sub") },
+        { label: I18n.t("default_apps"), glyph: "\uf085", file: "DefaultAppsSec.qml", sub: I18n.t("default_apps_sub") },
+        { label: I18n.t("notifications_sec"), glyph: "\uf0f3", file: "NotificationsSec.qml", sub: I18n.t("notifications_sub") },
+        { label: I18n.t("power_sec"), glyph: "\uf240", file: "PowerSec.qml", sub: I18n.t("power_sub") },
+        { label: I18n.t("widgets"), glyph: "\uf009", file: "WidgetsSec.qml", sub: I18n.t("widgets_sub") },
+        { label: I18n.t("language"), glyph: "\uf1ab", file: "LanguageSec.qml", sub: I18n.t("language_sub") },
+        { label: I18n.t("about"), glyph: "\uf109", file: "AboutSec.qml", sub: I18n.t("about_sub") }
     ]
 
     property int sectionId: Quickshell.env("METRO_SETTINGS_SECTION") ? parseInt(Quickshell.env("METRO_SETTINGS_SECTION")) : 0
 
-    // однострочный запуск команды
+    // Run command in shell
     function run(cmd) {
         if (pRun.running)
             pRun.running = false
@@ -37,20 +42,20 @@ FloatingWindow {
         command: ["true"]
     }
 
-    // модалка ввода текста (пароль wi-fi)
+    // Modal text input
     property var askCb: null
     property string askHeader: ""
+    property string askPlaceholder: ""
+    property bool modalOpen: false
 
     function askText(header, placeholder, cb) {
         askHeader = header
         askPlaceholder = placeholder
         askCb = cb
         input.text = ""
-        modal.visible = true
+        modalOpen = true
         input.forceActiveFocus()
     }
-
-    property string askPlaceholder: ""
 
     Rectangle {
         anchors.fill: parent
@@ -63,65 +68,64 @@ FloatingWindow {
         Row {
             anchors.fill: parent
 
-            // ─── рельса навигации ───
+            // ─── Navigation rail ───
             Rectangle {
-                width: 264
+                width: 270
                 height: parent.height
                 color: "transparent"
 
                 Column {
                     anchors.fill: parent
-                    anchors.margins: 18
+                    anchors.margins: 16
+                    spacing: 10
 
+                    // Top Header
                     Item {
                         width: parent.width
-                        height: 64
+                        height: 52
 
                         Column {
                             anchors.verticalCenter: parent.verticalCenter
-                            spacing: 6
+                            spacing: 4
 
                             Text {
-                                text: "настройки"
+                                text: I18n.t("settings")
                                 font.family: Theme.fontFamily
-                                font.pixelSize: 24
+                                font.pixelSize: 22
                                 font.weight: Font.Light
                                 color: Theme.text
                             }
                             Rectangle {
-                                width: 30
+                                width: 28
                                 height: 3
                                 radius: 2
                                 color: Theme.accent
                             }
                         }
 
-                        // крестик — закрыть приложение
+                        // Close button
                         Rectangle {
                             anchors.right: parent.right
                             anchors.verticalCenter: parent.verticalCenter
-                            width: 30
-                            height: 30
-                            radius: 15
+                            width: 28
+                            height: 28
+                            radius: 14
                             color: closeMa.containsMouse || closeMa.pressed ? Theme.alpha(Theme.red, closeMa.pressed ? 0.95 : 0.75) : Qt.rgba(1, 1, 1, 0.08)
+                            scale: closeMa.pressed ? 0.88 : (closeMa.containsMouse ? 1.08 : 1.0)
 
-                            Behavior on color {
-                                ColorAnimation {
-                                    duration: 120
-                                }
-                            }
+                            Behavior on color { ColorAnimation { duration: 120 } }
+                            Behavior on scale { NumberAnimation { duration: 120; easing.type: Easing.OutBack } }
 
                             Text {
                                 anchors.centerIn: parent
                                 text: "\uf00d"
                                 font.family: Theme.iconFont
-                                font.pixelSize: 13
+                                font.pixelSize: 12
                                 color: Theme.text
                             }
 
                             MouseArea {
                                 id: closeMa
-
                                 anchors.fill: parent
                                 hoverEnabled: true
                                 cursorShape: Qt.PointingHandCursor
@@ -130,126 +134,156 @@ FloatingWindow {
                         }
                     }
 
-                    Item {
+                    // Scrollable navigation list
+                    Flickable {
+                        id: navFlick
                         width: parent.width
-                        height: 14
-                    }
+                        height: parent.height - 52 - 30
+                        contentHeight: navCol.height + 8
+                        clip: true
+                        boundsBehavior: Flickable.StopAtBounds
 
-                    Repeater {
-                        model: win.sections
+                        Item {
+                            id: navCol
+                            width: navFlick.width
+                            height: win.sections.length * 44
 
-                        Rectangle {
-                            width: navList.width
-                            height: 44
-                            radius: 8
-                            color: win.sectionId === index ? Theme.glassHover : (navMa.containsMouse ? Theme.glass : "transparent")
-
-                            Behavior on color {
-                                ColorAnimation {
-                                    duration: 120
-                                }
-                            }
-
-                            // акцентная полоска активного пункта
+                            // Плавный скользящий индикатор активного раздела
                             Rectangle {
-                                anchors.left: parent.left
-                                anchors.leftMargin: 0
-                                anchors.verticalCenter: parent.verticalCenter
-                                width: 3
-                                height: 22
-                                radius: 2
-                                color: Theme.accent
-                                opacity: win.sectionId === index ? 1 : 0
+                                id: activeNavPill
+                                width: navCol.width
+                                height: 40
+                                radius: 8
+                                color: Theme.glassHover
+                                border.width: 1
+                                border.color: Theme.alpha(Theme.accent, 0.45)
+                                y: win.sectionId * 44
+                                z: 0
 
-                                Behavior on opacity {
+                                Behavior on y {
                                     NumberAnimation {
-                                        duration: 140
+                                        duration: 220
+                                        easing.type: Easing.OutCubic
                                     }
                                 }
-                            }
 
-                            Row {
-                                anchors.verticalCenter: parent.verticalCenter
-                                anchors.left: parent.left
-                                anchors.leftMargin: 14
-                                spacing: 12
-
-                                Text {
+                                // Акцентная полоска
+                                Rectangle {
+                                    anchors.left: parent.left
+                                    anchors.leftMargin: 2
                                     anchors.verticalCenter: parent.verticalCenter
-                                    text: modelData.glyph
-                                    font.family: Theme.iconFont
-                                    font.pixelSize: 15
-                                    color: win.sectionId === index ? Theme.accent : Theme.textDim
-                                }
-                                Text {
-                                    anchors.verticalCenter: parent.verticalCenter
-                                    text: modelData.label
-                                    font.family: Theme.fontFamily
-                                    font.pixelSize: 14
-                                    font.weight: win.sectionId === index ? Font.DemiBold : Font.Normal
-                                    color: win.sectionId === index ? Theme.text : Theme.textDim
+                                    width: 3
+                                    height: 20
+                                    radius: 2
+                                    color: Theme.accent
                                 }
                             }
 
-                            MouseArea {
-                                id: navMa
+                            Repeater {
+                                model: win.sections
 
-                                anchors.fill: parent
-                                hoverEnabled: true
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: win.sectionId = index
+                                Rectangle {
+                                    id: navItemRoot
+                                    required property var modelData
+                                    required property int index
+
+                                    width: navCol.width
+                                    height: 40
+                                    y: navItemRoot.index * 44
+                                    radius: 8
+                                    color: (win.sectionId === navItemRoot.index) ? "transparent" : (navMa.containsMouse ? Theme.glass : "transparent")
+                                    scale: navMa.pressed ? 0.96 : (navMa.containsMouse ? 1.01 : 1.0)
+                                    z: 1
+
+                                    Behavior on color { ColorAnimation { duration: 120 } }
+                                    Behavior on scale { NumberAnimation { duration: 110; easing.type: Easing.OutQuad } }
+
+                                    Row {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        anchors.left: parent.left
+                                        anchors.leftMargin: 12
+                                        spacing: 10
+
+                                        Text {
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            text: navItemRoot.modelData.glyph
+                                            font.family: Theme.iconFont
+                                            font.pixelSize: 14
+                                            color: win.sectionId === navItemRoot.index ? Theme.accent : Theme.textDim
+                                            scale: win.sectionId === navItemRoot.index ? 1.15 : (navMa.containsMouse ? 1.08 : 1.0)
+                                            width: 18
+
+                                            Behavior on scale { NumberAnimation { duration: 140; easing.type: Easing.OutBack } }
+                                            Behavior on color { ColorAnimation { duration: 120 } }
+                                        }
+
+                                        Text {
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            text: navItemRoot.modelData.label
+                                            font.family: Theme.fontFamily
+                                            font.pixelSize: 13
+                                            font.weight: win.sectionId === navItemRoot.index ? Font.DemiBold : Font.Normal
+                                            color: win.sectionId === navItemRoot.index ? Theme.text : Theme.textDim
+                                            elide: Text.ElideRight
+                                            width: navItemRoot.width - 48
+
+                                            Behavior on color { ColorAnimation { duration: 120 } }
+                                        }
+                                    }
+
+                                    MouseArea {
+                                        id: navMa
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: win.sectionId = navItemRoot.index
+                                    }
+                                }
                             }
                         }
                     }
 
-                    Item {
-                        id: navList
-
-                        width: parent.width
-                        height: 0
-                    }
-
-                    Item {
-                        width: parent.width
-                        height: parent.height
-                    }
-
+                    // Footer
                     Text {
                         text: "metro · quickshell"
                         font.family: Theme.fontFamily
-                        font.pixelSize: 11
+                        font.pixelSize: 10
                         font.letterSpacing: 1
                         color: Theme.textDim
                     }
                 }
             }
 
-            // разделитель
+            // Divider
             Rectangle {
                 width: 1
                 height: parent.height
                 color: Theme.stroke
             }
 
-            // ─── контент ───
+            // ─── Content ───
             Item {
-                width: parent.width - 265
+                width: parent.width - 271
                 height: parent.height
 
                 Column {
                     id: headCol
-
                     anchors {
                         top: parent.top
                         left: parent.left
                         right: parent.right
-                        margins: 24
+                        margins: 22
+                    }
+                    spacing: 2
+                    transform: Translate {
+                        id: headSlide
+                        x: 0
                     }
 
                     Text {
                         text: win.sections[win.sectionId].label
                         font.family: Theme.fontFamily
-                        font.pixelSize: 26
+                        font.pixelSize: 24
                         font.weight: Font.Light
                         color: Theme.text
                     }
@@ -261,63 +295,104 @@ FloatingWindow {
                     }
                     Item {
                         width: 1
-                        height: 8
+                        height: 6
                     }
                 }
 
                 Loader {
                     id: content
-
                     anchors {
                         top: headCol.bottom
                         left: parent.left
                         right: parent.right
                         bottom: parent.bottom
-                        leftMargin: 24
-                        rightMargin: 24
-                        bottomMargin: 20
+                        leftMargin: 22
+                        rightMargin: 22
+                        bottomMargin: 16
                     }
                     source: win.sections[win.sectionId].file
+                    transform: Translate {
+                        id: pageSlide
+                        x: 0
+                    }
                     onLoaded: {
                         item.win = win
                         if (item.refresh !== undefined)
                             item.refresh()
                     }
                 }
+
+                // Плавная анимация смены раздела (Turnstile Slide & Fade)
+                ParallelAnimation {
+                    id: pageInAnim
+
+                    NumberAnimation {
+                        target: content
+                        property: "opacity"
+                        from: 0.2
+                        to: 1.0
+                        duration: 220
+                        easing.type: Easing.OutQuad
+                    }
+
+                    NumberAnimation {
+                        target: pageSlide
+                        property: "x"
+                        from: 24
+                        to: 0
+                        duration: 240
+                        easing.type: Easing.OutCubic
+                    }
+
+                    NumberAnimation {
+                        target: headSlide
+                        property: "x"
+                        from: 14
+                        to: 0
+                        duration: 220
+                        easing.type: Easing.OutCubic
+                    }
+                }
             }
         }
 
-        // клик по разделу → перезагрузка секции
         Connections {
             target: win
             function onSectionIdChanged() {
                 content.source = ""
                 content.source = win.sections[win.sectionId].file
+                pageInAnim.restart()
             }
         }
     }
 
-    // ─── модалка ввода ───
+    // ─── Modal Input ───
     Rectangle {
         id: modal
-
         anchors.fill: parent
         radius: Theme.panelRadius
-        color: Qt.rgba(0, 0, 0, 0.5)
-        visible: false
+        color: Qt.rgba(0, 0, 0, 0.55)
+        visible: opacity > 0.01
+        opacity: win.modalOpen ? 1.0 : 0.0
+        z: 999
+
+        Behavior on opacity { NumberAnimation { duration: 160 } }
 
         Rectangle {
-            width: 380
-            height: headModal.height + bodyModal.height + 20
+            id: modalDialog
+            width: 400
+            height: headModal.height + bodyModal.height + 24
             radius: Theme.panelRadius
             color: Theme.glassDeep
             border.width: 1
             border.color: Theme.stroke
             anchors.centerIn: parent
+            scale: win.modalOpen ? 1.0 : 0.90
+
+            Behavior on scale { NumberAnimation { duration: 180; easing.type: Easing.OutBack } }
 
             Column {
                 id: headModal
-
                 anchors {
                     top: parent.top
                     left: parent.left
@@ -329,28 +404,27 @@ FloatingWindow {
                 Text {
                     text: win.askHeader
                     font.family: Theme.fontFamily
-                    font.pixelSize: 16
+                    font.pixelSize: 15
                     font.weight: Font.DemiBold
                     color: Theme.text
                 }
                 Text {
-                    text: "введи значение и нажми «ок»"
+                    text: I18n.t("enter_value")
                     font.family: Theme.fontFamily
-                    font.pixelSize: 12
+                    font.pixelSize: 11
                     color: Theme.textDim
                 }
             }
 
             Column {
                 id: bodyModal
-
                 anchors {
                     top: headModal.bottom
                     left: parent.left
                     right: parent.right
                     margins: 18
                 }
-                spacing: 12
+                spacing: 14
 
                 Rectangle {
                     width: parent.width
@@ -360,16 +434,17 @@ FloatingWindow {
                     border.width: 1
                     border.color: input.activeFocus ? Theme.accent : Theme.stroke
 
+                    Behavior on border.color { ColorAnimation { duration: 140 } }
+
                     TextInput {
                         id: input
-
                         anchors.fill: parent
                         anchors.margins: 12
                         verticalAlignment: TextInput.AlignVCenter
                         font.family: Theme.fontFamily
                         font.pixelSize: 14
                         color: Theme.text
-                        echoMode: win.askPlaceholder === "пароль" ? TextInput.Password : TextInput.Normal
+                        echoMode: (win.askPlaceholder === "пароль" || win.askPlaceholder === "password") ? TextInput.Password : TextInput.Normal
                         clip: true
                         onAccepted: okBtn.clicked()
                     }
@@ -394,37 +469,46 @@ FloatingWindow {
                         width: 92
                         height: 34
                         radius: 8
-                        color: Theme.glass
+                        color: cancelMa.containsMouse ? Theme.glassHover : Theme.glass
+                        scale: cancelMa.pressed ? 0.94 : (cancelMa.containsMouse ? 1.02 : 1.0)
+
+                        Behavior on color { ColorAnimation { duration: 120 } }
+                        Behavior on scale { NumberAnimation { duration: 110; easing.type: Easing.OutQuad } }
 
                         Text {
                             anchors.centerIn: parent
-                            text: "отмена"
+                            text: I18n.t("cancel")
                             font.family: Theme.fontFamily
                             font.pixelSize: 13
                             color: Theme.textDim
                         }
 
                         MouseArea {
+                            id: cancelMa
                             anchors.fill: parent
+                            hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
                             onClicked: {
                                 win.askCb = null
-                                modal.visible = false
+                                win.modalOpen = false
                             }
                         }
                     }
 
                     Rectangle {
                         id: okBtn
-
                         width: 110
                         height: 34
                         radius: 8
-                        color: Theme.alpha(Theme.accent, 0.92)
+                        color: Theme.alpha(Theme.accent, okMa.pressed ? 0.98 : 0.90)
+                        scale: okMa.pressed ? 0.94 : (okMa.containsMouse ? 1.02 : 1.0)
+
+                        Behavior on color { ColorAnimation { duration: 120 } }
+                        Behavior on scale { NumberAnimation { duration: 110; easing.type: Easing.OutQuad } }
 
                         Text {
                             anchors.centerIn: parent
-                            text: "подключить"
+                            text: I18n.t("apply")
                             font.family: Theme.fontFamily
                             font.pixelSize: 13
                             font.weight: Font.DemiBold
@@ -432,10 +516,12 @@ FloatingWindow {
                         }
 
                         MouseArea {
+                            id: okMa
                             anchors.fill: parent
+                            hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
                             onClicked: {
-                                modal.visible = false
+                                win.modalOpen = false
                                 if (win.askCb)
                                     win.askCb(input.text)
                                 win.askCb = null
@@ -450,9 +536,9 @@ FloatingWindow {
     Shortcut {
         sequence: "Esc"
         onActivated: {
-            if (modal.visible) {
+            if (win.modalOpen) {
                 win.askCb = null
-                modal.visible = false
+                win.modalOpen = false
             } else {
                 Qt.quit()
             }

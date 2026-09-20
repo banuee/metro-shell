@@ -73,7 +73,7 @@ PanelBase {
                 if (Array.isArray(p)) {
                     root.pinnedIds = p
                 } else {
-                    const defs = ["kitty", "firefox", "org.telegram.desktop", "nemo"]
+                    const defs = ["metro-settings", "nemo", "firefox", "kitty"]
                     const validDefs = []
                     for (let i = 0; i < defs.length; i++) {
                         if (root.allApps.some(a => a.id === defs[i]))
@@ -88,6 +88,62 @@ PanelBase {
 
     Process {
         id: pPinnedWrite
+    }
+
+    Process {
+        id: pTerminalExec
+    }
+
+    Process {
+        id: pClipboard
+    }
+
+    Process {
+        id: pSettingsDirect
+        command: ["sh", "-c", "export PATH=\"$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH\"; metro-settings"]
+    }
+
+    Process {
+        id: pAppDirect
+    }
+
+    function copyToClipboard(text) {
+        pClipboard.command = ["sh", "-c", "printf '%s' " + JSON.stringify(text) + " | wl-copy 2>/dev/null || true"]
+        pClipboard.running = true
+    }
+
+    function runTerminal(cmd) {
+        let clean = cmd.trim()
+        if (clean.startsWith(">")) clean = clean.substring(1).trim()
+        if (!clean) return
+        // Команда через tempfile + quoted-heredoc: кавычки и $ безопасны.
+        const script = "F=$(mktemp /tmp/metro-exec.XXXXXX.sh); cat > \"$F\" <<'METRO_EXEC_EOF'\n"
+            + clean + "\nMETRO_EXEC_EOF\n"
+            + "export F;"
+            + " if command -v kitty >/dev/null 2>&1; then kitty -e sh -c 'sh \"$F\"; echo; read -p \"exit\" _; rm -f \"$F\"';"
+            + " elif command -v alacritty >/dev/null 2>&1; then alacritty -e sh -c 'sh \"$F\"; echo; read -p \"exit\" _; rm -f \"$F\"';"
+            + " elif command -v foot >/dev/null 2>&1; then foot sh -c 'sh \"$F\"; echo; read -p \"exit\" _; rm -f \"$F\"';"
+            + " elif command -v gnome-terminal >/dev/null 2>&1; then gnome-terminal -- sh -c 'sh \"$F\"; echo; read -p \"exit\" _; rm -f \"$F\"';"
+            + " elif command -v xterm >/dev/null 2>&1; then xterm -e sh -c 'sh \"$F\"; echo; read -p \"exit\" _; rm -f \"$F\"';"
+            + " else sh \"$F\"; rm -f \"$F\"; fi"
+        pTerminalExec.command = ["sh", "-c", script]
+        pTerminalExec.running = true
+        Qt.callLater(() => root.open = false)
+    }
+
+    function evalMath(expr) {
+        if (!expr) return null
+        const trimmed = expr.trim()
+        if (!trimmed) return null
+        if (!/^[0-9+\-*/().\s^%]+$/.test(trimmed)) return null
+        if (!/[0-9]/.test(trimmed)) return null
+        try {
+            const res = Function('"use strict";return (' + trimmed + ')')()
+            if (typeof res === 'number' && !isNaN(res) && isFinite(res)) {
+                return Math.round(res * 1000000) / 1000000
+            }
+        } catch (e) {}
+        return null
     }
 
     Component.onCompleted: pPinnedRead.running = true
@@ -133,7 +189,10 @@ PanelBase {
         let last = "\u0000"
         for (let i = 0; i < filteredApps.length; i++) {
             const a = filteredApps[i]
-            const letter = a.name.charAt(0).toUpperCase()
+            let letter = a.name.charAt(0).toUpperCase()
+            if (/[0-9]/.test(letter) || !/[A-ZА-ЯЁ]/.test(letter)) {
+                letter = "#"
+            }
             if (letter !== last) {
                 last = letter
                 out.push({
@@ -157,8 +216,8 @@ PanelBase {
             leftMargin: -18
         }
         width: parent.width + 18
-        radius: Theme.panelRadius
-        color: Theme.bg
+        radius: Theme.panelLeftRadius
+        color: Theme.panelLeftBg
         border.width: 1
         border.color: Theme.stroke
     }
@@ -183,7 +242,7 @@ PanelBase {
                 spacing: 2
 
                 Text {
-                    text: "приложения"
+                    text: I18n.t("apps")
                     font.family: Theme.fontFamily
                     font.pixelSize: 28
                     font.weight: Font.Light
@@ -191,7 +250,7 @@ PanelBase {
                 }
 
                 Text {
-                    text: filteredApps.length + " установлено"
+                    text: filteredApps.length + " " + I18n.t("installed")
                     font.family: Theme.fontFamily
                     font.pixelSize: 11
                     color: Theme.textDim
@@ -199,23 +258,29 @@ PanelBase {
             }
         }
 
+        // Metro glass search (стекло + акцент при фокусе)
         Rectangle {
             width: parent.width
-            height: 38
-            radius: Theme.radiusSmall
-            color: Theme.glass
+            height: 44
+            radius: Theme.radius
+            color: searchInput.activeFocus ? Theme.glassHover : Theme.glass
+            border.width: 1
+            border.color: searchInput.activeFocus ? Theme.accent : Theme.stroke
+
+            Behavior on color { ColorAnimation { duration: 140 } }
+            Behavior on border.color { ColorAnimation { duration: 140 } }
 
             Text {
                 visible: query === ""
                 anchors {
                     left: parent.left
-                    leftMargin: 12
+                    leftMargin: 16
                     verticalCenter: parent.verticalCenter
                 }
                 text: "\uf002"
                 font.family: Theme.iconFont
-                font.pixelSize: 14
-                color: Theme.textDim
+                font.pixelSize: 15
+                color: searchInput.activeFocus ? Theme.accent : Theme.textDim
             }
 
             TextInput {
@@ -237,12 +302,31 @@ PanelBase {
                 cursorVisible: activeFocus
                 clip: true
                 onTextChanged: root.query = text
+                onAccepted: {
+                    const q = root.query.trim()
+                    if (!q) return
+                    if (q.startsWith(">")) {
+                        root.runTerminal(q.substring(1).trim())
+                        return
+                    }
+                    const mathVal = root.evalMath(q)
+                    if (mathVal !== null) {
+                        root.copyToClipboard(mathVal.toString())
+                        return
+                    }
+                    if (root.filteredApps.length > 0) {
+                        root.filteredApps[0].execute()
+                        Qt.callLater(() => root.open = false)
+                    } else {
+                        root.runTerminal(q)
+                    }
+                }
 
                 Text {
                     visible: searchInput.text === "" && !searchInput.activeFocus
                     anchors.left: parent.left
                     anchors.verticalCenter: parent.verticalCenter
-                    text: "поиск..."
+                    text: I18n.t("search_dots")
                     font.family: Theme.fontFamily
                     font.pixelSize: 14
                     color: Theme.textDim
@@ -265,6 +349,182 @@ PanelBase {
                 Behavior on opacity {
                     NumberAnimation {
                         duration: 150
+                    }
+                }
+            }
+        }
+
+        // ── Поисковые действия (Терминал / Калькулятор) ──
+        Item {
+            id: searchActionsArea
+            width: parent.width
+            visible: root.query.trim().length > 0
+            height: visible ? searchActionsCol.height : 0
+
+            Column {
+                id: searchActionsCol
+                width: parent.width
+                spacing: 8
+
+                // Карточка запуска в терминале
+                Rectangle {
+                    width: parent.width
+                    height: 44
+                    radius: Theme.radiusSmall
+                    color: termCardMa.containsMouse ? Theme.glassHover : Theme.glass
+                    border.width: 1
+                    border.color: termCardMa.containsMouse ? Theme.alpha(Theme.accent, 0.6) : Theme.stroke
+                    scale: termCardMa.pressed ? 0.96 : (termCardMa.containsMouse ? 1.01 : 1.0)
+
+                    Behavior on color { ColorAnimation { duration: 120 } }
+                    Behavior on scale { NumberAnimation { duration: 110; easing.type: Easing.OutQuad } }
+
+                    Row {
+                        anchors {
+                            fill: parent
+                            leftMargin: 10
+                            rightMargin: 10
+                        }
+                        spacing: 10
+
+                        Rectangle {
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: 30
+                            height: 30
+                            radius: 6
+                            color: Theme.alpha(Theme.accent, 0.18)
+                            scale: termCardMa.containsMouse ? 1.08 : 1.0
+                            Behavior on scale { NumberAnimation { duration: 140; easing.type: Easing.OutBack } }
+
+                            Text {
+                                anchors.centerIn: parent
+                                text: "\uf120"
+                                font.family: Theme.iconFont
+                                font.pixelSize: 14
+                                color: Theme.accent
+                            }
+                        }
+
+                        Column {
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: parent.width - 46
+                            spacing: 1
+
+                            Text {
+                                width: parent.width
+                                text: "> " + root.query.trim()
+                                font.family: Theme.fontFamily
+                                font.pixelSize: 13
+                                font.weight: Font.DemiBold
+                                color: Theme.text
+                                elide: Text.ElideRight
+                            }
+
+                            Text {
+                                text: "Выполнить команду в терминале (Enter)"
+                                font.family: Theme.fontFamily
+                                font.pixelSize: 10
+                                color: Theme.textDim
+                            }
+                        }
+                    }
+
+                    MouseArea {
+                        id: termCardMa
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: root.runTerminal(root.query)
+                    }
+                }
+
+                // Карточка калькулятора
+                Rectangle {
+                    id: mathCard
+                    readonly property var mathRes: root.evalMath(root.query)
+                    visible: mathCard.mathRes !== null
+                    width: parent.width
+                    height: 44
+                    radius: Theme.radiusSmall
+                    color: mathCardMa.containsMouse ? Theme.glassHover : Theme.glass
+                    border.width: 1
+                    border.color: mathCardMa.containsMouse ? Theme.alpha(Theme.green, 0.6) : Theme.stroke
+                    scale: mathCardMa.pressed ? 0.96 : (mathCardMa.containsMouse ? 1.01 : 1.0)
+
+                    Behavior on color { ColorAnimation { duration: 120 } }
+                    Behavior on scale { NumberAnimation { duration: 110; easing.type: Easing.OutQuad } }
+
+                    property bool copiedFlash: false
+                    Timer {
+                        id: copiedTimer
+                        interval: 1600
+                        onTriggered: mathCard.copiedFlash = false
+                    }
+
+                    Row {
+                        anchors {
+                            fill: parent
+                            leftMargin: 10
+                            rightMargin: 10
+                        }
+                        spacing: 10
+
+                        Rectangle {
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: 30
+                            height: 30
+                            radius: 6
+                            color: mathCard.copiedFlash ? Theme.alpha(Theme.green, 0.4) : Qt.rgba(0.2, 0.8, 0.4, 0.18)
+                            scale: mathCardMa.containsMouse || mathCard.copiedFlash ? 1.08 : 1.0
+
+                            Behavior on color { ColorAnimation { duration: 140 } }
+                            Behavior on scale { NumberAnimation { duration: 140; easing.type: Easing.OutBack } }
+
+                            Text {
+                                anchors.centerIn: parent
+                                text: mathCard.copiedFlash ? "\uf00c" : "\uf1ec"
+                                font.family: Theme.iconFont
+                                font.pixelSize: 14
+                                color: Theme.green
+                            }
+                        }
+
+                        Column {
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: parent.width - 46
+                            spacing: 1
+
+                            Text {
+                                width: parent.width
+                                text: "= " + (mathCard.mathRes !== null ? mathCard.mathRes : "")
+                                font.family: Theme.fontFamily
+                                font.pixelSize: 14
+                                font.weight: Font.DemiBold
+                                color: Theme.green
+                                elide: Text.ElideRight
+                            }
+
+                            Text {
+                                text: mathCard.copiedFlash ? "✓ Результат скопирован в буфер!" : "Нажмите для копирования результата в буфер"
+                                font.family: Theme.fontFamily
+                                font.pixelSize: 10
+                                color: mathCard.copiedFlash ? Theme.green : Theme.textDim
+                            }
+                        }
+                    }
+
+                    MouseArea {
+                        id: mathCardMa
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            if (mathCard.mathRes !== null) {
+                                root.copyToClipboard(mathCard.mathRes.toString())
+                                mathCard.copiedFlash = true
+                                copiedTimer.restart()
+                            }
+                        }
                     }
                 }
             }
@@ -304,7 +564,7 @@ PanelBase {
 
                         Text {
                             anchors.verticalCenter: parent.verticalCenter
-                            text: "закреплённые"
+                            text: I18n.t("pinned")
                             font.family: Theme.fontFamily
                             font.pixelSize: 14
                             font.weight: Font.DemiBold
@@ -354,13 +614,11 @@ PanelBase {
                             radius: Theme.radiusSmall
                             color: pinCardMa.containsMouse ? Theme.glassHover : Theme.glass
                             border.width: 1
-                            border.color: pinCardMa.containsMouse ? Theme.alpha(Theme.accent, 0.4) : Theme.stroke
+                            border.color: pinCardMa.containsMouse ? Theme.alpha(Theme.accent, 0.45) : Theme.stroke
+                            scale: pinCardMa.pressed ? 0.94 : (pinCardMa.containsMouse ? 1.02 : 1.0)
 
-                            Behavior on color {
-                                ColorAnimation {
-                                    duration: 120
-                                }
-                            }
+                            Behavior on color { ColorAnimation { duration: 120 } }
+                            Behavior on scale { NumberAnimation { duration: 110; easing.type: Easing.OutQuad } }
 
                             Row {
                                 anchors {
@@ -380,6 +638,8 @@ PanelBase {
                                     height: 30
                                     radius: 6
                                     color: Qt.rgba(0, 0, 0, 0.15)
+                                    scale: pinCardMa.containsMouse ? 1.08 : 1.0
+                                    Behavior on scale { NumberAnimation { duration: 140; easing.type: Easing.OutBack } }
 
                                     IconImage {
                                         anchors.centerIn: parent
@@ -425,12 +685,10 @@ PanelBase {
                                 radius: 11
                                 color: unpinMa.containsMouse ? Theme.alpha(Theme.red, 0.85) : "transparent"
                                 opacity: pinCardMa.containsMouse || unpinMa.containsMouse ? 1 : 0
+                                scale: unpinMa.containsMouse ? 1.15 : 1.0
 
-                                Behavior on opacity {
-                                    NumberAnimation {
-                                        duration: 100
-                                    }
-                                }
+                                Behavior on opacity { NumberAnimation { duration: 100 } }
+                                Behavior on scale { NumberAnimation { duration: 120; easing.type: Easing.OutBack } }
 
                                 Text {
                                     anchors.centerIn: parent
@@ -462,12 +720,20 @@ PanelBase {
                                 cursorShape: Qt.PointingHandCursor
                                 onClicked: mouse => {
                                     if (mouse.button === Qt.RightButton) {
-                                        root.togglePin(pinCard.app.id)
+                                        root.togglePin(pinCard.app ? pinCard.app.id : pinCard.modelData)
                                     } else {
                                         if (pinCard.app) {
                                             pinCard.app.execute()
-                                            Qt.callLater(() => root.open = false)
+                                        } else if (pinCard.modelData === "metro-settings" || (pinCard.modelData && pinCard.modelData.id === "metro-settings")) {
+                                            pSettingsDirect.running = true
+                                        } else if (pinCard.modelData) {
+                                            const execCmd = typeof pinCard.modelData === "string" ? pinCard.modelData : (pinCard.modelData.id || "")
+                                            if (execCmd) {
+                                                pAppDirect.command = ["sh", "-c", "export PATH=\"$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH\"; " + execCmd]
+                                                pAppDirect.running = true
+                                            }
                                         }
+                                        Qt.callLater(() => root.open = false)
                                     }
                                 }
                             }
@@ -494,7 +760,7 @@ PanelBase {
             id: appList
 
             width: parent.width
-            height: parent.height - 60 - 38 - (pinnedArea.visible ? pinnedArea.height + 12 : 0) - 24
+            height: parent.height - 60 - 38 - (pinnedArea.visible ? pinnedArea.height + 12 : 0) - (searchActionsArea.visible ? searchActionsArea.height + 12 : 0) - 24
             clip: true
             model: root.listModel
             boundsBehavior: Flickable.StopAtBounds
@@ -537,44 +803,82 @@ PanelBase {
                 width: appList.width
                 height: modelData.kind === "header" ? 44 : 62
 
-                Column {
+                // ── Заголовок буквы (статичный разделитель, без Jump Grid) ──
+                Item {
                     visible: modelData.kind === "header"
-                    anchors {
-                        left: parent.left
-                        leftMargin: 6
-                        bottom: parent.bottom
-                        bottomMargin: 4
-                    }
-                    spacing: 3
+                    anchors.fill: parent
 
-                    Text {
-                        text: modelData.kind === "header" ? modelData.letter : ""
-                        font.family: Theme.fontFamily
-                        font.pixelSize: 26
-                        font.weight: Font.Light
-                        color: Theme.text
-                    }
-
+                    // Material 3 Style
                     Rectangle {
-                        width: 30
-                        height: 3
-                        radius: 1.5
-                        color: Theme.accent
+                        visible: Theme.isMaterial
+                        anchors {
+                            left: parent.left
+                            leftMargin: 4
+                            verticalCenter: parent.verticalCenter
+                        }
+                        height: 28
+                        width: letterTxt.width + 20
+                        radius: Theme.radiusPill
+                        color: Theme.primary_container
+
+                        Text {
+                            id: letterTxt
+                            anchors.centerIn: parent
+                            text: modelData.kind === "header" ? modelData.letter : ""
+                            font.family: Theme.fontFamily
+                            font.pixelSize: 13
+                            font.weight: Font.Bold
+                            color: Theme.on_primary_container
+                        }
+                    }
+
+                    // Metro / WP Style
+                    Column {
+                        visible: !Theme.isMaterial
+                        anchors {
+                            left: parent.left
+                            leftMargin: 6
+                            bottom: parent.bottom
+                            bottomMargin: 4
+                        }
+                        spacing: 3
+
+                        Text {
+                            text: modelData.kind === "header" ? modelData.letter : ""
+                            font.family: Theme.fontFamily
+                            font.pixelSize: 26
+                            font.weight: Font.Light
+                            color: Theme.text
+                        }
+
+                        Rectangle {
+                            width: 30
+                            height: 3
+                            radius: Theme.isWP ? 0 : 1.5
+                            color: Theme.accent
+                        }
                     }
                 }
 
+                // ── Строка приложения ──
                 Item {
                     visible: modelData.kind === "app"
                     anchors.fill: parent
+                    scale: rowMa.pressed ? 0.97 : 1.0
+
+                    Behavior on scale { NumberAnimation { duration: 100; easing.type: Easing.OutQuad } }
 
                     Rectangle {
                         anchors.fill: parent
                         anchors.margins: 2
                         radius: Theme.radiusSmall
-                        color: rowMa.containsMouse ? Qt.rgba(1, 1, 1, 0.06) : "transparent"
+                        color: rowMa.containsMouse ? Qt.rgba(1, 1, 1, 0.07) : "transparent"
+
+                        Behavior on color { ColorAnimation { duration: 120 } }
                     }
 
                     Rectangle {
+                        id: iconBox
                         anchors {
                             left: parent.left
                             leftMargin: 6
@@ -586,7 +890,11 @@ PanelBase {
                         visible: entry.app !== null
                         color: Theme.glass
                         border.width: 1
-                        border.color: Theme.stroke
+                        border.color: rowMa.containsMouse ? Theme.alpha(Theme.accent, 0.4) : Theme.stroke
+                        scale: rowMa.pressed ? 0.92 : (rowMa.containsMouse ? 1.06 : 1.0)
+
+                        Behavior on scale { NumberAnimation { duration: 140; easing.type: Easing.OutBack } }
+                        Behavior on border.color { ColorAnimation { duration: 120 } }
 
                         IconImage {
                             anchors.centerIn: parent
@@ -608,7 +916,7 @@ PanelBase {
                     Text {
                         anchors {
                             left: parent.left
-                            leftMargin: 64
+                            leftMargin: rowMa.containsMouse ? 68 : 64
                             right: parent.right
                             rightMargin: 42
                             verticalCenter: parent.verticalCenter
@@ -616,8 +924,11 @@ PanelBase {
                         text: entry.app ? entry.app.name : ""
                         font.family: Theme.fontFamily
                         font.pixelSize: 15
-                        color: Theme.text
+                        color: rowMa.containsMouse ? "#ffffff" : Theme.text
                         elide: Text.ElideRight
+
+                        Behavior on anchors.leftMargin { NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
+                        Behavior on color { ColorAnimation { duration: 120 } }
                     }
 
                     // Кнопка закрепления (звёздочка)
@@ -635,12 +946,10 @@ PanelBase {
                         readonly property bool pinned: entry.app && root.isPinned(entry.app.id)
                         opacity: pinned ? 1 : (pinBtnMa.containsMouse ? 1 : (rowMa.containsMouse ? 0.75 : 0.2))
                         color: pinBtnMa.containsMouse ? Theme.glassHover : "transparent"
+                        scale: pinBtnMa.pressed ? 0.84 : (pinBtnMa.containsMouse ? 1.18 : 1.0)
 
-                        Behavior on opacity {
-                            NumberAnimation {
-                                duration: 120
-                            }
-                        }
+                        Behavior on opacity { NumberAnimation { duration: 120 } }
+                        Behavior on scale { NumberAnimation { duration: 120; easing.type: Easing.OutBack } }
 
                         Text {
                             anchors.centerIn: parent
@@ -684,8 +993,10 @@ PanelBase {
                             } else {
                                 if (entry.app) {
                                     entry.app.execute()
-                                    Qt.callLater(() => root.open = false)
+                                } else if (entry.modelData && (entry.modelData.id === "metro-settings" || entry.modelData.id === "metro-settings.desktop")) {
+                                    pSettingsDirect.running = true
                                 }
+                                Qt.callLater(() => root.open = false)
                             }
                         }
                     }
@@ -693,4 +1004,6 @@ PanelBase {
             }
         }
     }
+
 }
+

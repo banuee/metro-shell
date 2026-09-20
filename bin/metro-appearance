@@ -1,0 +1,143 @@
+#!/usr/bin/env bash
+# metro-appearance - Universal Appearance Setter for Hyprland / Quickshell / GTK2/3/4 / Qt
+
+set -e
+
+action="$1"
+value="$2"
+
+run_gsettings() {
+    local schema="$1"
+    local key="$2"
+    local val="$3"
+    if dbus-send --session --dest=org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus.Peer.Ping >/dev/null 2>&1; then
+        gsettings set "$schema" "$key" "$val" 2>/dev/null || true
+    fi
+    dbus-run-session gsettings set "$schema" "$key" "$val" 2>/dev/null || true
+}
+
+get_gsettings() {
+    local schema="$1"
+    local key="$2"
+    local state_file="$3"
+    local def_val="$4"
+    local val=""
+    if dbus-send --session --dest=org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus.Peer.Ping >/dev/null 2>&1; then
+        val=$(gsettings get "$schema" "$key" 2>/dev/null | tr -d "'" || true)
+    fi
+    if [ -z "$val" ]; then
+        val=$(dbus-run-session gsettings get "$schema" "$key" 2>/dev/null | tr -d "'" || true)
+    fi
+    if [ -z "$val" ] && [ -n "$state_file" ] && [ -f "$state_file" ]; then
+        val=$(cat "$state_file" 2>/dev/null || true)
+    fi
+    if [ -z "$val" ]; then
+        val="$def_val"
+    fi
+    echo "$val"
+}
+
+case "$action" in
+    icon|icons|icon-theme)
+        if [ -z "$value" ]; then
+            get_gsettings org.gnome.desktop.interface icon-theme "$HOME/.local/state/metro/icon-theme" "Papirus-Dark"
+            exit 0
+        fi
+        echo "Setting icon theme to: $value"
+        
+        # 1. GSettings
+        run_gsettings org.gnome.desktop.interface icon-theme "$value"
+        
+        # 2. GTK 3
+        mkdir -p "$HOME/.config/gtk-3.0"
+        if [ -f "$HOME/.config/gtk-3.0/settings.ini" ]; then
+            sed -i "s/^gtk-icon-theme-name=.*/gtk-icon-theme-name=$value/" "$HOME/.config/gtk-3.0/settings.ini"
+            if ! grep -q "^gtk-icon-theme-name=" "$HOME/.config/gtk-3.0/settings.ini"; then
+                echo "gtk-icon-theme-name=$value" >> "$HOME/.config/gtk-3.0/settings.ini"
+            fi
+        else
+            cat <<EOF > "$HOME/.config/gtk-3.0/settings.ini"
+[Settings]
+gtk-icon-theme-name=$value
+gtk-theme-name=adw-gtk3
+gtk-font-name=Noto Sans 10
+gtk-cursor-theme-name=breeze_cursors
+gtk-application-prefer-dark-theme=1
+EOF
+        fi
+        
+        # 3. GTK 4
+        mkdir -p "$HOME/.config/gtk-4.0"
+        if [ -f "$HOME/.config/gtk-4.0/settings.ini" ]; then
+            sed -i "s/^gtk-icon-theme-name=.*/gtk-icon-theme-name=$value/" "$HOME/.config/gtk-4.0/settings.ini"
+            if ! grep -q "^gtk-icon-theme-name=" "$HOME/.config/gtk-4.0/settings.ini"; then
+                echo "gtk-icon-theme-name=$value" >> "$HOME/.config/gtk-4.0/settings.ini"
+            fi
+        else
+            cat <<EOF > "$HOME/.config/gtk-4.0/settings.ini"
+[Settings]
+gtk-icon-theme-name=$value
+gtk-theme-name=adw-gtk3
+gtk-font-name=Noto Sans 10
+gtk-cursor-theme-name=breeze_cursors
+gtk-application-prefer-dark-theme=1
+EOF
+        fi
+        
+        # 4. GTK 2
+        if [ -f "$HOME/.gtkrc-2.0" ]; then
+            sed -i "s/^gtk-icon-theme-name=.*/gtk-icon-theme-name=\"$value\"/" "$HOME/.gtkrc-2.0"
+        else
+            echo "gtk-icon-theme-name=\"$value\"" > "$HOME/.gtkrc-2.0"
+        fi
+        
+        # 5. KDE / Qt globals
+        mkdir -p "$HOME/.config"
+        if command -v kwriteconfig5 >/dev/null 2>&1; then
+            kwriteconfig5 --file kdeglobals --group Icons --key Theme "$value" 2>/dev/null || true
+        fi
+        if command -v kwriteconfig6 >/dev/null 2>&1; then
+            kwriteconfig6 --file kdeglobals --group Icons --key Theme "$value" 2>/dev/null || true
+        fi
+        
+        # 6. Store metro state
+        mkdir -p "$HOME/.local/state/metro"
+        printf '%s' "$value" > "$HOME/.local/state/metro/icon-theme"
+        
+        # 7. XSettings reload
+        pkill -HUP xsettingsd 2>/dev/null || true
+        
+        # 8. Reload metro shell for instant icon theme update (does not affect metro-settings)
+        (qs-metro >/dev/null 2>&1 &)
+        ;;
+        
+    gtk|gtk-theme|theme)
+        if [ -z "$value" ]; then
+            get_gsettings org.gnome.desktop.interface gtk-theme "$HOME/.local/state/metro/gtk-theme" "adw-gtk3"
+            exit 0
+        fi
+        echo "Setting GTK theme to: $value"
+        run_gsettings org.gnome.desktop.interface gtk-theme "$value"
+        
+        mkdir -p "$HOME/.config/gtk-3.0" "$HOME/.config/gtk-4.0"
+        for f in "$HOME/.config/gtk-3.0/settings.ini" "$HOME/.config/gtk-4.0/settings.ini"; do
+            if [ -f "$f" ]; then
+                sed -i "s/^gtk-theme-name=.*/gtk-theme-name=$value/" "$f"
+                if ! grep -q "^gtk-theme-name=" "$f"; then
+                    echo "gtk-theme-name=$value" >> "$f"
+                fi
+            fi
+        done
+        if [ -f "$HOME/.gtkrc-2.0" ]; then
+            sed -i "s/^gtk-theme-name=.*/gtk-theme-name=\"$value\"/" "$HOME/.gtkrc-2.0"
+        fi
+        mkdir -p "$HOME/.local/state/metro"
+        printf '%s' "$value" > "$HOME/.local/state/metro/gtk-theme"
+        pkill -HUP xsettingsd 2>/dev/null || true
+        ;;
+        
+    *)
+        echo "Usage: metro-appearance icon <theme_name> | metro-appearance gtk <theme_name>"
+        exit 1
+        ;;
+esac

@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# metro-update — distro-aware system updater in a terminal.
+# Picks package manager (sven-update, cachy-update, pacman, apt, dnf, zypper) and
+# a terminal (kitty, alacritty, foot, gnome-terminal, xterm).
+# NOTE: sven-update is a custom script for LFS+sven systems
+# (sudo sven sync + sudo sven install of what's needed); not in this repo,
+# write it yourself if you're on sven.
+set -u
+
+pick_update_cmd() {
+    if command -v sven-update >/dev/null 2>&1; then
+        printf 'sven-update\n'
+    elif command -v cachy-update >/dev/null 2>&1; then
+        printf 'cachy-update\n'
+    elif command -v pacman >/dev/null 2>&1; then
+        printf 'sudo pacman -Syu\n'
+    elif command -v apt-get >/dev/null 2>&1; then
+        printf 'sudo apt-get update && sudo apt-get upgrade\n'
+    elif command -v dnf >/dev/null 2>&1; then
+        printf 'sudo dnf upgrade --refresh\n'
+    elif command -v zypper >/dev/null 2>&1; then
+        printf 'sudo zypper dup\n'
+    else
+        return 1
+    fi
+}
+
+U="$(pick_update_cmd)" || { echo "metro-update: no supported package manager found" >&2; exit 1; }
+
+run_in_term() {
+    if command -v kitty >/dev/null 2>&1; then
+        exec kitty --hold -e sh -c "$U"
+    elif command -v alacritty >/dev/null 2>&1; then
+        exec alacritty -e sh -c "$U; echo; read -rp 'done — press Enter...' _"
+    elif command -v foot >/dev/null 2>&1; then
+        exec foot sh -c "$U; echo; read -rp 'done — press Enter...' _"
+    elif command -v gnome-terminal >/dev/null 2>&1; then
+        exec gnome-terminal -- sh -c "$U; echo; read -rp 'done — press Enter...' _"
+    elif command -v x-terminal-emulator >/dev/null 2>&1; then
+        exec x-terminal-emulator -e sh -c "$U; echo; read -rp 'done — press Enter...' _"
+    elif command -v xterm >/dev/null 2>&1; then
+        exec xterm -e sh -c "$U; echo; read -rp 'done — press Enter...' _"
+    else
+        return 1
+    fi
+}
+
+run_in_term || { echo "metro-update: no terminal found (kitty/alacritty/foot/gnome-terminal/xterm)" >&2; exit 1; }

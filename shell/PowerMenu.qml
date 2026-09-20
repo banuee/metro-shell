@@ -89,31 +89,31 @@ PanelWindow {
                 model: [
                     {
                         "glyph": "\uf023",
-                        "label": "блокировка",
+                        "label": I18n.t("lock"),
                         "cmd": "$HOME/.local/bin/metro-lock",
                         "danger": false
                     },
                     {
                         "glyph": "\uf2d5",
-                        "label": "выйти",
+                        "label": I18n.t("logout"),
                         "cmd": "hyprctl dispatch exit",
                         "danger": false
                     },
                     {
                         "glyph": "\uf186",
-                        "label": "сон",
+                        "label": I18n.t("sleep"),
                         "cmd": "systemctl suspend",
                         "danger": false
                     },
                     {
                         "glyph": "\uf021",
-                        "label": "перезагрузка",
+                        "label": I18n.t("restart"),
                         "cmd": "systemctl reboot",
                         "danger": true
                     },
                     {
                         "glyph": "\uf011",
-                        "label": "выключение",
+                        "label": I18n.t("shutdown"),
                         "cmd": "systemctl poweroff",
                         "danger": true
                     }
@@ -152,7 +152,7 @@ PanelWindow {
 
                         Text {
                             anchors.horizontalCenter: parent.horizontalCenter
-                            text: pbtn.armedBtn ? "точно?" : modelData.label
+                            text: pbtn.armedBtn ? I18n.t("sure") : modelData.label
                             font.family: Theme.fontFamily
                             font.pixelSize: 11
                             color: pbtn.armedBtn ? Theme.red : Theme.textDim

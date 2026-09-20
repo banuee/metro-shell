@@ -5,8 +5,10 @@ import Quickshell.Io
 import "WeatherCodes.js" as WC
 
 QtObject {
+    id: root
+
     readonly property string city: cityName
-    property string cityName: "Минск"
+    property string cityName: "Minsk"
     property real lat: 53.9
     property real lon: 27.57
 
@@ -29,15 +31,24 @@ QtObject {
     }
 
     function text(c) {
-        return WC.text(c)
+        return WC.text(c, I18n.lang)
     }
 
-    function ruDay(d) {
-        const days = ["вс", "пн", "вт", "ср", "чт", "пт", "сб"]
-        const full = ["воскресенье", "понедельник", "вторник", "среда", "четверг", "пятница", "суббота"]
+    function formatDay(d, isToday) {
+        if (isToday) {
+            return {
+                short: I18n.t("today"),
+                full: I18n.t("today")
+            }
+        }
+        const ruDays = ["вс", "пн", "вт", "ср", "чт", "пт", "сб"]
+        const ruFull = ["воскресенье", "понедельник", "вторник", "среда", "четверг", "пятница", "суббота"]
+        const enDays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+        const enFull = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+        const isRu = I18n.lang === "ru"
         return {
-            short: days[d.getDay()],
-            full: full[d.getDay()]
+            short: isRu ? ruDays[d.getDay()] : enDays[d.getDay()],
+            full: isRu ? ruFull[d.getDay()] : enFull[d.getDay()]
         }
     }
 
@@ -76,14 +87,18 @@ QtObject {
             return
         }
         searching = true
+        const lang = I18n.lang === "ru" ? "ru" : "en"
         const url = "https://geocoding-api.open-meteo.com/v1/search?name=" + encodeURIComponent(q) +
-            "&count=6&language=ru&format=json"
+            "&count=6&language=" + lang + "&format=json"
         pGeo.command = ["curl", "-s", "--max-time", "10", url]
         pGeo.running = true
     }
 
+    property string rawDataCache: ""
+
     function handleData(txt) {
         try {
+            rawDataCache = txt
             const j = JSON.parse(txt)
             temp = j.current.temperature_2m
             code = j.current.weather_code
@@ -110,9 +125,10 @@ QtObject {
             const days = []
             for (let i = 0; i < j.daily.time.length; i++) {
                 const d = new Date(j.daily.time[i] + "T12:00")
+                const dayObj = formatDay(d, i === 0)
                 days.push({
-                    "day": i === 0 ? "сегодня" : ruDay(d).short,
-                    "full": i === 0 ? "сегодня" : ruDay(d).full,
+                    "day": dayObj.short,
+                    "full": dayObj.full,
                     "code": j.daily.weather_code[i],
                     "max": Math.round(j.daily.temperature_2m_max[i]),
                     "min": Math.round(j.daily.temperature_2m_min[i])
@@ -122,6 +138,16 @@ QtObject {
             loaded = true
         } catch (e) {}
         fetching = false
+    }
+
+    // Re-parse day strings when language changes
+    property Connections langConn: Connections {
+        target: I18n
+        function onLangChanged() {
+            if (root.rawDataCache !== "") {
+                root.handleData(root.rawDataCache)
+            }
+        }
     }
 
     function handleGeo(txt) {
@@ -142,9 +168,9 @@ QtObject {
     function loadCity(txt) {
         try {
             const j = JSON.parse(txt)
-            cityName = j.name
-            lat = j.lat
-            lon = j.lon
+            if (j.name) cityName = j.name
+            if (j.lat !== undefined) lat = j.lat
+            if (j.lon !== undefined) lon = j.lon
         } catch (e) {}
         fetch()
     }

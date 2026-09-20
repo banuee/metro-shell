@@ -1,4 +1,9 @@
 singleton Theme 1.0 Theme.qml
-singleton Weather 1.0 Weather.qml
 singleton Media 1.0 Media.qml
+singleton Weather 1.0 Weather.qml
+singleton I18n 1.0 I18n.qml
 LockScreen 1.0 LockScreen.qml
+LockAuth 1.0 LockAuth.qml
+LockDate 1.0 LockDate.qml
+LockPower 1.0 LockPower.qml
+LockSysinfo 1.0 LockSysinfo.qml

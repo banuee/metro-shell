@@ -1,6 +1,10 @@
 #!/bin/bash
-# metro-settings — запуск/перезапуск приложения настроек (отдельный инстанс quickshell)
+# metro-settings — launch/restart settings application (isolated quickshell instance)
+# Logs: per-user dir (never /tmp — it breaks multi-user systems).
+export PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+LOGDIR="${XDG_STATE_HOME:-$HOME/.local/state}/metro/logs"
+mkdir -p "$LOGDIR"
 pkill -f "quickshell -p $HOME/.config/quickshell/metro-settings" 2>/dev/null
 sleep 0.2
-QT_QPA_PLATFORMTHEME=gtk3 setsid quickshell -p "$HOME/.config/quickshell/metro-settings" >/tmp/qs-metro-settings.log 2>&1 </dev/null &
-echo "metro-settings запущен, лог: /tmp/qs-metro-settings.log"
+QT_QPA_PLATFORMTHEME=gtk3 setsid quickshell -p "$HOME/.config/quickshell/metro-settings" >"$LOGDIR/qs-metro-settings.log" 2>&1 </dev/null &
+echo "metro-settings launched, log: $LOGDIR/qs-metro-settings.log"

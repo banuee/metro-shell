@@ -1,0 +1,9 @@
+[Unit]
+Description=Metro Shell — apply metro-shell.conf (themes + hyprland)
+StartLimitIntervalSec=30
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/metro-conf apply
+Nice=10

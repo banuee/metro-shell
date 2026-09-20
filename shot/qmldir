@@ -1,0 +1,4 @@
+singleton Theme 1.0 Theme.qml
+singleton I18n 1.0 I18n.qml
+ShotToolbar 1.0 ShotToolbar.qml
+ShotPreview 1.0 ShotPreview.qml

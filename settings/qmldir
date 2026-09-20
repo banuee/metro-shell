@@ -1,11 +1,17 @@
 singleton Theme 1.0 Theme.qml
+singleton I18n 1.0 I18n.qml
 KitToggle 1.0 KitToggle.qml
 KitSlider 1.0 KitSlider.qml
 KitCombo 1.0 KitCombo.qml
 Personalization 1.0 Personalization.qml
+NetworkSec 1.0 NetworkSec.qml
+KeyboardSec 1.0 KeyboardSec.qml
+DefaultAppsSec 1.0 DefaultAppsSec.qml
 SoundSec 1.0 SoundSec.qml
 DisplaySec 1.0 DisplaySec.qml
-NetworkSec 1.0 NetworkSec.qml
+WindowManagerSec 1.0 WindowManagerSec.qml
+NotificationsSec 1.0 NotificationsSec.qml
 PowerSec 1.0 PowerSec.qml
 WidgetsSec 1.0 WidgetsSec.qml
+LanguageSec 1.0 LanguageSec.qml
 AboutSec 1.0 AboutSec.qml

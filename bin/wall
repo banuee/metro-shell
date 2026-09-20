@@ -1,16 +1,15 @@
 #!/usr/bin/env bash
-# wall — смена обоев через awww с анимацией + авто-перекраска темы metro
+# wall — change wallpaper via awww with animation + auto theme recolor
 #
-#   wall <картинка>       поставить обои (с красивой анимацией)
-#   wall random | rand    случайные из ~/Wallpapers (на 2 уровня вглубь)
-#   wall -t <тип> [img]   выбрать тип перехода: fade grow any outer wave wipe
+#   wall <image>          set wallpaper (with transition animation)
+#   wall random | rand    random from ~/Wallpapers (up to 2 levels deep)
+#   wall -t <type> [img]  choose transition type: fade grow any outer wave wipe
 #                         left right top bottom random
-#   wall --no-theme       без перекраски metro-colors
+#   wall --no-theme       skip metro-colors recoloring
 #
-# Перекраска затрагивает: Theme.qml шелла и hyprlock.conf (обои+акцент),
-# если hyprlock.conf есть.
+# Recoloring affects: Theme.qml across all instances via matugen (Material You).
 #
-# Переменные: WALL_FPS (по умолчанию 120), WALL_TRANSITION (тип по умолчанию).
+# Environment variables: WALL_FPS (default 120), WALL_TRANSITION (default type).
 set -u
 
 WALLDIR="$HOME/Wallpapers"
@@ -33,44 +32,58 @@ done
 cur="$(cat "$STATEDIR/wall" 2>/dev/null || true)"
 
 if [[ -z "$IMG" || "$IMG" == "random" || "$IMG" == "rand" ]]; then
-    all_imgs="$(find "$WALLDIR" -maxdepth 2 -type f 2>/dev/null | grep -Evi '\.(jpe?g|png|webp|gif|bmp)$' -v)"
-    # сначала не повторяем текущие обои
+    all_imgs="$(find "$WALLDIR" -maxdepth 2 -type f 2>/dev/null | grep -Ei '\.(jpe?g|png|webp|gif|bmp)$')"
     pick="$(echo "$all_imgs" | grep -Fvx "$cur" | shuf -n1)"
     [[ -n "$pick" && -f "$pick" ]] || pick="$(echo "$all_imgs" | shuf -n1)"
     if [[ -f "$pick" ]]; then IMG="$pick"; fi
 fi
 
 if [[ ! -f "$IMG" ]]; then
-    echo "[wall] нет файла обоев: '$IMG'" >&2
+    echo "[wall] wallpaper file not found: '$IMG'" >&2
     exit 1
 fi
 IMG="$(readlink -f "$IMG")"
+TARGET_IMG="$IMG"
+case "${IMG,,}" in
+    *.mp4|*.webm|*.mkv|*.mov)
+        CACHEDIR="${XDG_CACHE_HOME:-$HOME/.cache}/metro/live_walls"
+        mkdir -p "$CACHEDIR"
+        HASH="$(sha256sum "$IMG" | cut -d' ' -f1)"
+        WEBP_OUT="$CACHEDIR/${HASH}.webp"
+        if [[ ! -f "$WEBP_OUT" ]]; then
+            echo "[wall] generating live loop preview: $IMG..." >&2
+            ffmpeg -y -t 12 -i "$IMG" -vf "scale=1920:-1:flags=lanczos,fps=30" -loop 0 -q:v 75 "$WEBP_OUT" >/dev/null 2>&1 || true
+        fi
+        if [[ -f "$WEBP_OUT" ]]; then
+            TARGET_IMG="$WEBP_OUT"
+        fi
+        ;;
+esac
 
-# если тип не задан — свой curated-random (каждому эффекту свои параметры)
 T="${TYPE:-$(echo fade grow any outer wave left right wipe | tr ' ' '\n' | shuf -n1)}"
 case "$T" in
     fade)   FLAGS=(--transition-duration 2.8 --transition-bezier .65,0,.35,1) ;;
     grow)   FLAGS=(--transition-duration 2.2 --transition-pos 0.5,0.42) ;;
-    any)    FLAGS=(--transition-duration 2.2) ;;                                  # точка случайная сама
+    any)    FLAGS=(--transition-duration 2.2) ;;
     outer)  FLAGS=(--transition-duration 2.4) ;;
     wave)   FLAGS=(--transition-duration 3.0 --transition-angle 315 --transition-wave 90,150) ;;
     left|right|top|bottom) FLAGS=(--transition-duration 2.2) ;;
     wipe)   FLAGS=(--transition-duration 2.4 --transition-angle $((RANDOM % 12 * 30))) ;;
-    *)      FLAGS=(--transition-duration 2.5) ;;                                  # ручной кастом
+    *)      FLAGS=(--transition-duration 2.5) ;;
 esac
 
 if ! out="$(awww img --resize crop -f Lanczos3 --transition-type "$T" \
-        --transition-fps "$FPS" ${FLAGS[@]+"${FLAGS[@]}"} "$IMG" 2>&1)"; then
-    echo "[wall] ошибка: $out" >&2
-    echo "[wall] если демон не запущен — сделай: wall-start" >&2
+        --transition-fps "$FPS" ${FLAGS[@]+"${FLAGS[@]}"} "$TARGET_IMG" 2>&1)"; then
+    echo "[wall] error: $out" >&2
+    echo "[wall] if daemon is not running — run: wall-start" >&2
     exit 1
 fi
 
 printf '%s\n' "$IMG" > "$STATEDIR/wall"
-printf '%s\n' "обои: $IMG  [$T, ${FPS}fps]"
+printf '%s\n' "wallpaper: $IMG  [$T, ${FPS}fps]"
 printf '%s\n' "$T" > "$STATEDIR/last-transition"
 
 if (( THEME )); then
-    metro-colors >/dev/null 2>&1 && printf '%s\n' "тема: $(metro-colors status)" \
-        || echo "[wall] metro-colors не сработал (не критично)" >&2
+    metro-colors >/dev/null 2>&1 && printf '%s\n' "theme: $(metro-colors status)" \
+        || echo "[wall] metro-colors failed (non-critical)" >&2
 fi

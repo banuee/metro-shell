@@ -1,0 +1,185 @@
+#!/usr/bin/env python3
+"""
+metro-theme - Theme Switcher for Material You, Windows Phone, and Metro Live
+"""
+
+import sys
+import os
+import re
+import json
+import subprocess
+from pathlib import Path
+
+HOME = Path.home()
+STATE_DIR = HOME / ".local/state/metro"
+STATE_FILE = STATE_DIR / "theme"
+
+HYPR_LUA = HOME / ".config/hypr/hyprland.lua"
+
+THEMES = {
+    "material": {
+        "id": "material",
+        "name": "Material You",
+        "name_ru": "Material You (Pixel UI)",
+        "badge": "Pixel UI",
+        "desc": "Динамические цвета Material 3 · Google Sans · Скругления 24px/28px",
+        "desc_en": "Material 3 Dynamic Colors · Google Sans · 24px/28px squircle",
+        "fontFamily": "Google Sans",
+        "headlineFont": "Google Sans",
+        "iconFont": "NotoSans Nerd Font",
+        "radius": 24,
+        "radiusSmall": 14,
+        "radiusPill": 999,
+        "panelRadius": 28,
+        "panelWidth": 420,
+        "tileAlpha": 1.0,
+        "hypr_blur": True,
+        "hypr_rounding": 24,
+    },
+    "wp": {
+        "id": "wp",
+        "name": "Windows Phone",
+        "name_ru": "Windows Phone (True Metro)",
+        "badge": "True Metro",
+        "desc": "Острые углы 0px · Жирный Segoe UI · Live Tiles сетка",
+        "desc_en": "0px sharp corners · Bold Segoe UI · Authentic Metro Live Tiles",
+        "fontFamily": "Segoe UI Variable Static Text",
+        "headlineFont": "Segoe UI Variable Static Display",
+        "iconFont": "NotoSans Nerd Font",
+        "radius": 0,
+        "radiusSmall": 0,
+        "radiusPill": 0,
+        "panelRadius": 0,
+        "panelWidth": 420,
+        "tileAlpha": 1.0,
+        "hypr_blur": False,
+        "hypr_rounding": 0,
+    },
+    "metro": {
+        "id": "metro",
+        "name": "Metro Live Tiles",
+        "name_ru": "Metro Live Tiles",
+        "badge": "Acrylic",
+        "desc": "Акриловое полупрозрачное стекло · Скругления 10px / 16px",
+        "desc_en": "Acrylic translucent glass · 10px / 16px soft radii",
+        "fontFamily": "Segoe UI Variable Static Text",
+        "headlineFont": "Segoe UI Variable Static Display",
+        "iconFont": "NotoSans Nerd Font",
+        "radius": 10,
+        "radiusSmall": 8,
+        "radiusPill": 999,
+        "panelRadius": 16,
+        "panelWidth": 420,
+        "tileAlpha": 0.85,
+        "hypr_blur": True,
+        "hypr_rounding": 12,
+    },
+}
+
+
+def get_current_theme_id():
+    if STATE_FILE.exists():
+        try:
+            tid = STATE_FILE.read_text().strip()
+            if tid in THEMES:
+                return tid
+        except Exception:
+            pass
+    return "material"
+
+
+def apply_hyprland(tinfo):
+    if not HYPR_LUA.exists():
+        return
+    try:
+        content = HYPR_LUA.read_text()
+        blur_val = "true" if tinfo["hypr_blur"] else "false"
+        content = re.sub(r'(blur\s*=\s*\{\s*enabled\s*=\s*)(true|false)', rf'\g<1>{blur_val}', content)
+        content = re.sub(r'(rounding\s*=\s*)\d+', rf'\g<1>{tinfo["hypr_rounding"]}', content)
+        HYPR_LUA.write_text(content)
+        subprocess.run(["hyprctl", "reload"], capture_output=True, timeout=3)
+    except Exception as e:
+        print(f"[metro-theme] warning: hyprland update failed: {e}", file=sys.stderr)
+
+
+def set_theme(theme_id, custom_accent=None):
+    if theme_id not in THEMES:
+        print(f"Error: Unknown theme '{theme_id}'. Available: {', '.join(THEMES.keys())}", file=sys.stderr)
+        return False
+
+    tinfo = THEMES[theme_id]
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    STATE_FILE.write_text(theme_id)
+
+    # Write everything into the single config as a batch (no intermediate apply),
+    # then one regeneration via metro-colors --from-conf.
+    subprocess.run(["metro-conf", "set", "--no-apply", "theme", theme_id],
+                   capture_output=True)
+    subprocess.run(["metro-conf", "set", "--no-apply", "compositor.rounding",
+                    str(tinfo["hypr_rounding"])], capture_output=True)
+    subprocess.run(["metro-conf", "set", "--no-apply", "compositor.blur",
+                    "true" if tinfo["hypr_blur"] else "false"], capture_output=True)
+    if custom_accent:
+        subprocess.run(["metro-conf", "set", "--no-apply", "accent", custom_accent],
+                       capture_output=True)
+
+    subprocess.run(["metro-colors", "--from-conf"])
+
+    apply_hyprland(tinfo)
+
+    print(f"Theme '{tinfo['name']}' ({theme_id}) applied successfully.")
+    return True
+
+
+def list_themes_json():
+    cur = get_current_theme_id()
+    res = []
+    for k, v in THEMES.items():
+        res.append({
+            "id": v["id"],
+            "name": v["name"],
+            "name_ru": v["name_ru"],
+            "badge": v.get("badge", ""),
+            "desc": v["desc"],
+            "desc_en": v["desc_en"],
+            "active": v["id"] == cur,
+            "accent": "#8cd5b3" if v["id"] == "material" else "#0050ef"
+        })
+    return res
+
+
+def main():
+    args = sys.argv[1:]
+    if not args:
+        cur = get_current_theme_id()
+        print(f"Current theme: {THEMES[cur]['name']} ({cur})")
+        return
+
+    cmd = args[0]
+    if cmd == "list":
+        if len(args) > 1 and args[1] == "--json":
+            print(json.dumps(list_themes_json(), ensure_ascii=False, indent=2))
+        else:
+            cur = get_current_theme_id()
+            for k, v in THEMES.items():
+                mark = "*" if k == cur else " "
+                print(f"[{mark}] {k:<12} - {v['name']}: {v['desc_en']}")
+    elif cmd == "get":
+        if len(args) > 1 and args[1] == "--json":
+            cur = get_current_theme_id()
+            print(json.dumps({"theme": cur, "name": THEMES[cur]["name"]}, ensure_ascii=False))
+        else:
+            print(get_current_theme_id())
+    elif cmd == "set":
+        if len(args) < 2:
+            print("Usage: metro-theme set <theme_id> [accent_hex]", file=sys.stderr)
+            sys.exit(1)
+        accent = args[2] if len(args) > 2 else None
+        success = set_theme(args[1], accent)
+        sys.exit(0 if success else 1)
+    else:
+        print(__doc__)
+
+
+if __name__ == "__main__":
+    main()

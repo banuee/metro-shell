@@ -1,43 +1,56 @@
 #!/bin/bash
-# metro-lock — экран блокировки на quickshell (замена hyprlock)
-#   metro-lock            реальная блокировка (WlSessionLock, ext-session-lock-v1)
-#   metro-lock --debug    оверлей БЕЗ блокировки сессии (для тестов)
-# Фон: стоп-кадр экрана в момент блокировки (grim), фолбэк — текущие обои.
+# metro-lock — lock screen on quickshell (replaces hyprlock)
+#   metro-lock            real session lock (WlSessionLock, ext-session-lock-v1)
+#   metro-lock --debug    overlay WITHOUT session lock (for testing)
+# Background: always the current wallpaper ($HOME/.local/state/metro/wall),
+# copied to $XDG_RUNTIME_DIR. No screen snapshots (privacy + no TOCTOU).
 
 DEBUG=0
-[ "$1" = "--debug" ] && DEBUG=1
+case "${1:-}" in
+  "") ;;
+  --debug) DEBUG=1 ;;
+  -h|--help) echo "Usage: metro-lock [--debug]"; exit 0 ;;
+  *) echo "metro-lock: unknown argument '$1' (only --debug allowed)" >&2; exit 2 ;;
+esac
 
-BG=/tmp/qs-lock-bg.png
-MARK=/tmp/qs-metro-lock.debug
+# Wallpaper -> runtime copy (0600, per-user dir, no fixed /tmp path)
+RUNTIME="${XDG_RUNTIME_DIR:-/tmp}"
+BG="$RUNTIME/qs-lock-bg.png"
 WALL=$(cat "$HOME/.local/state/metro/wall" 2>/dev/null)
+if [ -n "$WALL" ] && [ -f "$WALL" ]; then
+    cp -f "$WALL" "$BG" 2>/dev/null && chmod 600 "$BG" 2>/dev/null
+    export METRO_LOCK_BG="$BG"
+else
+    rm -f "$BG" 2>/dev/null
+    echo "metro-lock: no wallpaper found — using dark fallback" >&2
+fi
 
-# стоп-кадр до старта локскрина (иначе снимем самого себя)
-MON="$(hyprctl monitors -j 2>/dev/null | jq -r '.[0].name' 2>/dev/null)"
-grim ${MON:+-o "$MON"} "$BG.tmp" 2>/dev/null && mv "$BG.tmp" "$BG" || {
-    [ -n "$WALL" ] && cp "$WALL" "$BG"
-}
-[ -f "$BG" ] || echo "metro-lock: нет фона — будет тёмная подложка" >&2
-
-# [c] в паттерне — чтобы pgrep/pkill не нашли сами себя
+# [c] in pattern prevents pgrep/pkill from matching itself
 PAT="quickshell -p .*metro-lo[c]k$"
 RUNNING=$(pgrep -f "$PAT" | head -n1)
+MARK="$RUNTIME/qs-metro-lock.debug"
 if [ -n "$RUNNING" ]; then
-    if [ "$DEBUG" = 1 ] || [ -f "$MARK" ]; then
-        pkill -f "$PAT"; sleep 0.2     # debug-рестарт или замена debug → real
+    if [ -f "$MARK" ]; then
+        pkill -f "$PAT"; sleep 0.2     # replace running debug instance
+    elif [ "$DEBUG" = 1 ]; then
+        echo "metro-lock: real lock is active — refusing debug overlay" >&2
+        exit 1                         # never kill a real lock
     else
-        exit 0                         # реальный лок уже стоит — не мешаем
+        exit 0                         # real lock already active
     fi
 fi
 rm -f "$MARK"
-[ "$DEBUG" = 1 ] && touch "$MARK"
+[ "$DEBUG" = 1 ] && touch "$MARK" && chmod 600 "$MARK"
 
-LOG=/tmp/qs-metro-lock.log
+LOGDIR="${XDG_STATE_HOME:-$HOME/.local/state}/metro/logs"
+mkdir -p "$LOGDIR"
+LOG="$LOGDIR/qs-metro-lock.log"
 if [ "$DEBUG" = 1 ]; then
     METRO_LOCK_DEBUG=1 QT_QPA_PLATFORMTHEME=gtk3 \
         setsid quickshell -p "$HOME/.config/quickshell/metro-lock" >"$LOG" 2>&1 </dev/null &
-    echo "metro-lock DEBUG запущен (сессия НЕ заблокирована), лог: $LOG"
+    echo "metro-lock DEBUG started (session NOT locked), log: $LOG"
 else
     QT_QPA_PLATFORMTHEME=gtk3 \
         setsid quickshell -p "$HOME/.config/quickshell/metro-lock" >"$LOG" 2>&1 </dev/null &
-    echo "экран заблокирован, лог: $LOG"
+    echo "screen locked, log: $LOG"
 fi
